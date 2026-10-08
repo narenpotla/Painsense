@@ -1,156 +1,140 @@
-# PainSense — Prototype Backend
+# PainSense
 
-This is a working CNN-LSTM backend for the PainSense pipeline described in your
-proposal and Review-2 deck:
+Prototype that estimates a facial pain score from a webcam, logs it, and raises an alert.
 
-`Camera → Face Detection → CNN (spatial) → LSTM (temporal) → Pain Score → Log + Alert → Dashboard`
+Camera → face detection → CNN (ResNet18) → LSTM → score (0–10) → alert → SQLite log → Flask dashboard
 
-## Important, read this before you train anything
+## What the score means
 
-**SynPAIN is not a video dataset.** It's 10,710 *static* synthetic images —
-5,355 identities, each with one Neutral and one Pain (expressive) photo
-(filenames like `1000012790_NoPain_man_Young.jpg`). There is no real temporal
-sequence in it. So:
+The score is not a clinical pain measurement (not VAS and not PSPI).
 
-- The **CNN** is trained on **real, honest labels**: Pain vs No-Pain
-  classification from SynPAIN. This part is legitimate supervised learning.
-- The **LSTM** cannot be legitimately trained on real temporal dynamics from
-  this dataset alone. `data_prep.py` builds **synthetic "onset" sequences**
-  by alpha-blending each identity's Neutral → Pain image across 8 frames,
-  with a rising 0→10 pseudo-intensity target. This gives the LSTM something
-  real to learn a temporal *pattern* from (rising score as pain features
-  intensify), but it is a **proxy, not real video**.
+Training labels come from SynPAIN video face frames in `data/videos/face_frames`:
 
-**Say this out loud in the demo.** Your own Review-2 slide 10 ("Responsible
-Use") already commits to documenting limitations honestly — this is exactly
-that limitation, and reviewers will respect you naming it more than they'd
-respect you hiding it. Suggested line: *"For the prototype we trained the CNN
-on real pain/no-pain labels from SynPAIN, and trained the LSTM's temporal
-head on synthetically interpolated onset sequences as a proxy for video,
-since SynPAIN itself only contains static image pairs — real video data
-(UNBC-McMaster / BioVid) is the next roadmap step."*
+- **Pain** videos are morphs from a neutral face to a pain expression. The first frame is labeled 0 and the last frame is labeled 10.
+- **NoPain** videos are labeled 0 on every frame.
 
-## 1. Setup
+The live model estimates that generated target. A held-out error of about 1.7 points was measured on that target. Full-pain frames are often predicted lower than 10, so a strong expression may stay under the alert line.
 
-```bash
-cd painsense_backend
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+SynPAIN faces are synthetic. A laptop webcam is a different kind of image, so live scores can stay low.
+
+## Setup
+
+Windows, from this folder:
+
+```powershell
+python -m venv venv
+venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## 2. Get the dataset
+The trained demo weights are `checkpoints/pain_intensity.pt`.
+Calibration is `checkpoints/pain_intensity_calibration.json`.
 
-Easiest way (no git-lfs needed):
+## Run the demo
 
-```bash
-pip install huggingface_hub
-python3 -c "
-from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id='TaatiTeam/SynPAIN',
-    repo_type='dataset',
-    allow_patterns=['SynPain/Images/*'],
-    local_dir='data/raw'
-)
-"
+Use two terminals.
+
+Terminal 1 — camera, model, logging, LEDs:
+
+```powershell
+venv\Scripts\python.exe realtime_infer.py
 ```
 
-This should leave images at `data/raw/SynPain/Images/*.jpg`, which matches
-`config.RAW_DATASET_DIR`. If your download lands somewhere else, either move
-it or pass `--raw_dir` to `data_prep.py`.
+Terminal 2 — dashboard:
 
-> If you're short on time tonight, you don't need all 10,710 images. Ctrl-C
-> the download after a few hundred files, or just delete extra files from
-> the folder afterward — `data_prep.py` only looks at whatever's there.
-
-## 3. Prepare data
-
-```bash
-python data_prep.py --step all
+```powershell
+venv\Scripts\python.exe dashboard_web.py
 ```
 
-This does two things:
-- Face-crops every image into `data/frames/{pain,no_pain}/` (for CNN training)
-- Builds synthetic onset sequences into `data/sequences/*.npz` (for LSTM training)
+Open http://127.0.0.1:5000
 
-## 4. Train
+Press `q` in the camera window to stop.
 
-**Strongly recommended: do this on a GPU (Google Colab free tier is fine).**
-CPU training works but is much slower — use `--limit` to cap dataset size for
-a same-day run.
+What you should see:
 
-```bash
-# Stage 1: CNN on real pain/no-pain labels
-python train.py --stage cnn --epochs 6 --limit 2000
+- No face: the buffer clears, the model does not run, and the alert turns off.
+- Face present: one crop is taken each second. The first score appears after 8 successful face crops.
+- Score below 6: prediction `NO PAIN`, alert stays off. The score is still logged.
+- Score 6 or above: prediction `PAIN` and an alert.
 
-# Stage 2: CNN-LSTM on synthetic onset sequences (loads stage-1 encoder)
-python train.py --stage lstm --epochs 10 --limit 600
-```
+Do not also start `dashboard.py`. It uses the same port, 5000.
 
-Checkpoints land in `checkpoints/cnn_encoder.pt` and `checkpoints/cnn_lstm.pt`.
+`gpiozero` is only needed on a Raspberry Pi. On Windows the LED calls do nothing and the camera still runs.
 
-Sanity-check before the demo:
+## LEDs (Raspberry Pi only)
 
-```bash
-python evaluate.py --stage cnn     # accuracy + confusion matrix
-python evaluate.py --stage lstm    # MAE on held-out synthetic sequences
-```
+`hardware.py` uses these pins:
 
-## 5. Run the live demo
+| LED | GPIO | When it is on |
+|---|---|---|
+| Green | 17 | A face is being captured |
+| Blue | 27 | Capturing, score under 6 |
+| Red | 22 | Capturing, score at or above 6 |
 
-Two terminals, both from inside `painsense_backend/`:
+On the Pi:
 
 ```bash
-# Terminal 1 — camera capture + inference + alert logic + logging
-python realtime_infer.py
-
-# Terminal 2 — dashboard
-python dashboard.py
-# then open http://localhost:5000
+pip install gpiozero
 ```
 
-`realtime_infer.py` opens your webcam, shows a green "CAPTURE ACTIVE" dot
-(your LED indicator, on-screen for the demo), samples a face crop roughly
-once per second, and once it has 8 frames buffered, runs the CNN-LSTM and
-shows a live pain score. If a score crosses the threshold (default 6/10) or
-rises by ≥2 points over the last 5 readings, a red alert banner appears and
-the dashboard flips to ALERT.
+## Train again
 
-If training doesn't finish in time: `python realtime_infer.py --no-model`
-still runs face detection and the buffering/UI pipeline end-to-end so you
-can demonstrate the *architecture* live, and explain the score computation
-separately with `evaluate.py` output. An honestly-labeled partial system
-beats a claim of a system that doesn't actually run.
+Intensity model (this is what the camera loads):
 
-## 6. Swapping SQLite → PostgreSQL later
+```powershell
+venv\Scripts\python.exe train.py --stage intensity --epochs 6
+```
 
-Everything logging-related goes through `db.py`'s three functions
-(`init_db`, `log_score`, `get_recent`). To move to Postgres for the final
-system, reimplement those three against a Postgres table with the same
-columns (`timestamp`, `score`, `alert_flag`, `alert_reason`) — nothing else
-in the codebase needs to change.
+Older Pain / No Pain classifier (not used by the camera):
 
-## File map
+```powershell
+venv\Scripts\python.exe train.py --stage cnn
+venv\Scripts\python.exe train.py --stage lstm
+```
+
+`evaluate.py` and `test_video.py` score that older classifier. They do not evaluate `pain_intensity.pt`.
+
+## Main settings (`config.py`)
+
+| Setting | Value |
+|---|---|
+| Image size | 224×224 |
+| CNN embedding | 128 |
+| LSTM hidden size | 64 |
+| Frames per sequence | 8 |
+| Seconds between live samples | 1.0 |
+| Alert threshold | 6.0 |
+
+`probability` stored in the database is `score / 10`. It is the same score written as a fraction. The alert uses the 0–10 score, not that fraction.
+
+## Data layout
+
+- `data/videos/face_frames/` — cropped faces. Folder names contain `_Pain_` or `_NoPain_`.
+- `data/intensity/manifest.csv` — generated 0–10 label for each labeled frame.
+- Folders named `video_001` … `video_040` have no Pain/NoPain name. Intensity training skips them.
+
+## Files
 
 | File | Role |
 |---|---|
-| `config.py` | all paths, hyperparameters, alert thresholds |
-| `data_prep.py` | face cropping, synthetic sequence construction |
-| `dataset.py` | PyTorch `Dataset` classes |
-| `model.py` | `CNNEncoder`, `CNNClassifier`, `PainCNNLSTM` |
-| `train.py` | stage-1 CNN training, stage-2 LSTM training |
-| `evaluate.py` | accuracy / confusion matrix / MAE |
-| `alert_rules.py` | threshold + trend alert logic |
-| `db.py` | SQLite score logging |
-| `realtime_infer.py` | the actual live demo script |
-| `dashboard.py` | Flask live dashboard (matches your deck's mockup) |
+| `config.py` | Paths, image size, sequence length, alert threshold |
+| `model.py` | ResNet18 encoder, old classifier, live `PainIntensityLSTM` |
+| `dataset.py` | Loads frames and builds the 0–10 targets |
+| `train.py` | CNN stage, LSTM stage, and intensity stage |
+| `realtime_infer.py` | Webcam demo |
+| `alert_rules.py` | Alert when the score reaches 6 |
+| `db.py` | SQLite log at `logs/painsense.db` |
+| `dashboard_state.py` | Latest result in `logs/dashboard_state.json` |
+| `dashboard_web.py` | Dashboard at http://127.0.0.1:5000 |
+| `hardware.py` | Raspberry Pi LEDs |
+| `extract_video_frames.py` | Saves frames from SynPAIN mp4 files |
+| `crop_video_faces.py` | Haar face crop into `face_frames` |
 
-## What to say if asked "is this clinically validated?"
+## Limits
 
-No — and your deck already says so (slide 10). This is a feasibility
-prototype: real supervised CNN training on synthetic facial pain data, a
-temporal head trained on a clearly-labeled synthetic proxy, and a working
-end-to-end capture→inference→alert→dashboard loop. Clinical validation,
-real video-based temporal training, and hardware integration are explicitly
-future roadmap items, not claims being made today.
+This is a feasibility prototype.
+
+- The 0–10 value is morph progress, not a measured clinical score.
+- There is no patient study in this repository.
+- UNBC-McMaster or BioVid labels would be required for a real intensity model.
+- `data_prep.py` can still build alpha-blended sequences from static SynPAIN photos. That path is not what the current checkpoint was trained on.
