@@ -99,3 +99,16 @@ MIN_VALID_SEQUENCE = SEQ_LEN
 # Seconds between frames sampled into the sequence buffer during live
 # inference. Derived from the training stride so live spacing = training spacing.
 CAPTURE_INTERVAL_SEC = SEQ_STRIDE / VIDEO_FPS
+
+# Smallest face (pixels) accepted from a live webcam. Larger than the
+# 40 px used for the SynPAIN crops to cut Haar false positives on
+# background clutter. The crop recipe itself is unchanged.
+LIVE_MIN_FACE_SIZE = (60, 60)
+
+# ---------------- Logging / dashboard ----------------
+# The live loop logs ~4 scores per second; keep the newest rows only.
+DB_MAX_ROWS = 100_000
+# Points shown in the dashboard trend chart (120 = 30 s at 0.25 s).
+DASHBOARD_HISTORY = 120
+# Dashboard shows OFFLINE when the live state is older than this.
+DASHBOARD_STALE_SEC = 3.0

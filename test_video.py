@@ -1,19 +1,24 @@
 """
-PainSense - test CNN-LSTM on a real SynPAIN video.
+PainSense - run a model on one video file.
 
-This script:
-    Real SynPAIN .mp4
-        -> real video frames
-        -> face detection
-        -> face crop
-        -> 8 consecutive frames
-        -> trained CNN-LSTM
-        -> Pain / NoPain probability
+Default (intensity, the model the camera uses):
+    video -> same live loop as realtime_infer.py (headless, no logging)
+          -> face crop every 0.25 s -> ResNet features -> LSTM
+          -> 0-10 score (expression intensity, synthetic morph scale)
+          -> AlertState
+    If the file name contains _Pain_ / _NoPain_, the generated morph
+    target is printed next to each score and an MAE is reported.
+    NOTE: the final feature checkpoint was trained on all 40 SynPAIN
+    videos, so on those files this is a pipeline check, not a test.
+
+--binary: the older Pain / NoPain CNN-LSTM classifier (cnn_lstm.pt).
 
 Usage:
     python test_video.py "path_to_video.mp4"
+    python test_video.py "path_to_video.mp4" --binary
 """
 
+import argparse
 import sys
 from pathlib import Path
 from collections import deque
@@ -393,23 +398,107 @@ def test_video(video_path):
 # MAIN
 # =========================================================
 
+# =========================================================
+# INTENSITY MODEL ON A VIDEO
+# =========================================================
+
+def test_video_intensity(video_path):
+
+    import realtime_infer
+    from dataset import frame_intensity
+
+    video_path = Path(video_path)
+
+    if not video_path.exists():
+        raise FileNotFoundError(f"Video not found:\n{video_path}")
+
+    cap = cv2.VideoCapture(str(video_path))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+
+    name = video_path.name.lower()
+    label = 1 if "_pain_" in name else 0 if "_nopain_" in name else None
+
+    records = realtime_infer.run(
+        video_path=video_path,
+        headless=True,
+        log=False,
+        verbose=False
+    )
+
+    print()
+    print("======================================")
+    print("VIDEO TEST - expression intensity (synthetic morph scale)")
+    print("======================================")
+    print(f"Video: {video_path.name} ({total} frames)")
+    print(
+        "Expected: "
+        + ("Pain morph (target 0 -> 10)" if label == 1
+           else "NoPain (target 0)" if label == 0 else "unlabeled")
+    )
+    print()
+    print(f"{'t (s)':>7} {'frame':>6} {'score':>6} {'median':>7} "
+          f"{'target':>7} alert")
+
+    errors = []
+
+    for r in records:
+        if not r["face"]:
+            print(f"{r['t']:7.2f} {r['frame']:6d}   no face")
+            continue
+
+        if r["score"] is None:
+            continue
+
+        target = None
+
+        if label is not None:
+            target = frame_intensity(label, r["frame"], 0, max(total - 1, 1))
+            errors.append(abs(r["score"] - target))
+
+        print(
+            f"{r['t']:7.2f} {r['frame']:6d} {r['score']:6.2f} "
+            f"{r['median']:7.2f} "
+            + (f"{target:7.2f}" if target is not None else "      -")
+            + ("  ALERT" if r["alert"] else "")
+        )
+
+    scored = [r for r in records if r["score"] is not None]
+    faces = sum(r["face"] for r in records)
+
+    print()
+    print(f"Samples: {len(records)}, with face: {faces}, scored: {len(scored)}")
+
+    if not scored:
+        print("No score: fewer than 8 consecutive face samples.")
+        return
+
+    print(f"Final score: {scored[-1]['score']:.2f}   "
+          f"max score: {max(r['score'] for r in scored):.2f}")
+    print(f"Alert ever on: {any(r['alert'] for r in scored)}")
+
+    if errors:
+        print(f"MAE vs morph target: {sum(errors) / len(errors):.3f}")
+
+
+# =========================================================
+# MAIN
+# =========================================================
+
 if __name__ == "__main__":
 
-    if len(sys.argv) != 2:
-
-        print(
-            "Usage:"
-        )
-
-        print(
-            'python test_video.py '
-            '"path_to_video.mp4"'
-        )
-
-        sys.exit(1)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("video")
+    ap.add_argument(
+        "--binary",
+        action="store_true",
+        help="test the older Pain / NoPain classifier instead"
+    )
+    args = ap.parse_args()
 
     seed_everything(config.SEED)
 
-    test_video(
-        sys.argv[1]
-    )
+    if args.binary:
+        test_video(args.video)
+    else:
+        test_video_intensity(args.video)

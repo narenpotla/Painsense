@@ -378,11 +378,22 @@ class FeatureIntensityModel(nn.Module):
         return self.head(z).squeeze(-1)
 
 
-def imagenet_backbone():
-    """Frozen ImageNet ResNet18 returning (N, 512) pooled features."""
+def imagenet_backbone(state_dict=None):
+    """
+    Frozen ImageNet ResNet18 returning (N, 512) pooled features.
 
-    backbone = tvm.resnet18(weights=tvm.ResNet18_Weights.IMAGENET1K_V1)
-    backbone.fc = nn.Identity()
+    state_dict: backbone weights stored in a checkpoint. When given,
+    nothing is downloaded, so the live demo works offline.
+    """
+
+    if state_dict is None:
+        backbone = tvm.resnet18(weights=tvm.ResNet18_Weights.IMAGENET1K_V1)
+        backbone.fc = nn.Identity()
+    else:
+        backbone = tvm.resnet18(weights=None)
+        backbone.fc = nn.Identity()
+        backbone.load_state_dict(state_dict)
+
     backbone.eval()
 
     for p in backbone.parameters():

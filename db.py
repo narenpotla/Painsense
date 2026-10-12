@@ -31,8 +31,11 @@ def get_conn():
         exist_ok=True
     )
 
+    # timeout: wait instead of failing with "database is locked" while
+    # the dashboard reads during a write.
     conn = sqlite3.connect(
-        config.DB_PATH
+        config.DB_PATH,
+        timeout=5.0
     )
 
     return conn
@@ -45,6 +48,9 @@ def get_conn():
 def init_db():
 
     conn = get_conn()
+
+    # WAL lets the dashboard read while realtime_infer writes ~4 rows/s.
+    conn.execute("PRAGMA journal_mode=WAL")
 
     # Existing table is preserved.
     conn.execute("""
@@ -88,6 +94,35 @@ def init_db():
 
     conn.close()
 
+    prune(config.DB_MAX_ROWS)
+
+
+def prune(max_rows=None):
+    """Keep only the newest max_rows rows. Returns rows deleted."""
+
+    if max_rows is None:
+        max_rows = config.DB_MAX_ROWS
+
+    conn = get_conn()
+
+    cur = conn.execute(
+        """
+        DELETE FROM pain_scores
+        WHERE id <= (
+            SELECT id FROM pain_scores
+            ORDER BY id DESC
+            LIMIT 1 OFFSET ?
+        )
+        """,
+        (int(max_rows),)
+    )
+
+    deleted = cur.rowcount
+    conn.commit()
+    conn.close()
+
+    return deleted
+
 
 # =========================================================
 # LOG PREDICTION
@@ -104,11 +139,11 @@ def log_score(
     Store one intensity observation.
 
     score:
-        Intensity from 0 to 10.
+        Expression intensity from 0 to 10 (synthetic morph scale).
 
     prediction:
-        'PAIN' when the score reaches the alert threshold,
-        otherwise 'NO PAIN'.
+        'PAIN' when the alert is on, otherwise 'NO PAIN'. When not
+        given, falls back to the single-frame threshold.
     """
 
     score = max(

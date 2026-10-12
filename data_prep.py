@@ -63,6 +63,14 @@ def get_face_detector():
 
     if _face_cascade is None:
 
+        if not hasattr(cv2, "CascadeClassifier"):
+            raise RuntimeError(
+                f"OpenCV {cv2.__version__} has no CascadeClassifier "
+                "(it was removed in OpenCV 5). Install OpenCV 4.x:\n"
+                "    pip uninstall -y opencv-python opencv-python-headless\n"
+                '    pip install "opencv-python>=4.8,<5"'
+            )
+
         cascade_path = (
             cv2.data.haarcascades
             + "haarcascade_frontalface_default.xml"

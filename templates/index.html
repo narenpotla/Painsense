@@ -37,19 +37,20 @@
                     <h1>PainSense</h1>
 
                     <p>
-                        CNN-LSTM Pain Monitoring System
+                        Facial expression intensity monitor &middot; research prototype
                     </p>
                 </div>
 
             </div>
 
 
-            <div class="capture-status">
+            <div class="capture-status offline"
+                 id="captureBadge">
 
                 <span class="status-dot"></span>
 
-                <span>
-                    CAPTURE ACTIVE
+                <span id="captureHeader">
+                    WAITING FOR CAMERA
                 </span>
 
             </div>
@@ -71,12 +72,12 @@
             <section class="cards">
 
 
-                <!-- PAIN SCORE -->
+                <!-- EXPRESSION INTENSITY -->
 
                 <div class="card score-card">
 
                     <div class="card-title">
-                        PAIN SCORE
+                        EXPRESSION INTENSITY
                     </div>
 
                     <div class="score-value"
@@ -87,7 +88,7 @@
                     </div>
 
                     <div class="score-scale">
-                        / 10
+                        / 10 (synthetic scale)
                     </div>
 
                     <div class="score-label"
@@ -108,18 +109,19 @@
                         CAPTURE
                     </div>
 
-                    <div class="card-status active">
+                    <div class="card-status offline"
+                         id="captureStatus">
 
                         <span class="small-dot"></span>
 
-                        ACTIVE
+                        <span id="captureText">OFFLINE</span>
 
                     </div>
 
-                    <p class="card-description">
+                    <p class="card-description"
+                       id="captureDescription">
 
-                        Camera / webcam
-                        connected
+                        realtime_infer.py is not running
 
                     </p>
 
@@ -169,14 +171,15 @@
                         </h2>
 
                         <p>
-                            Current CNN-LSTM inference
+                            One face crop every {{ interval }} s &middot;
+                            ResNet18 features &rarr; LSTM over {{ seq_len }} frames
                         </p>
 
                     </div>
 
                     <div class="model-badge">
 
-                        CNN + LSTM
+                        ResNet18 + LSTM
 
                     </div>
 
@@ -202,7 +205,7 @@
                     <div class="live-item">
 
                         <span>
-                            Pain Score
+                            Intensity
                         </span>
 
                         <strong id="painProbability">
@@ -228,11 +231,11 @@
                     <div class="live-item">
 
                         <span>
-                            Model
+                            Updated
                         </span>
 
-                        <strong>
-                            CNN-LSTM
+                        <strong id="updatedAt">
+                            &mdash;
                         </strong>
 
                     </div>
@@ -254,18 +257,18 @@
                     <div>
 
                         <h2>
-                            Pain Score Trend
+                            Intensity Trend
                         </h2>
 
                         <p>
-                            Recent pain observations
+                            Recent scores (0&ndash;10, synthetic morph scale)
                         </p>
 
                     </div>
 
                     <div class="trend-info">
 
-                        Last 10 observations
+                        Last {{ history_points }} scores
 
                     </div>
 
@@ -317,7 +320,7 @@
                                 </th>
 
                                 <th>
-                                    Pain Score
+                                    Intensity
                                 </th>
 
                                 <th>
@@ -368,7 +371,7 @@
                     </span>
 
                     <strong>
-                        CNN-LSTM
+                        ResNet18 + LSTM
                     </strong>
 
                 </div>
@@ -394,7 +397,7 @@
                     </span>
 
                     <strong>
-                        8 Frames
+                        {{ seq_len }} frames, {{ interval }} s apart
                     </strong>
 
                 </div>
@@ -403,11 +406,11 @@
                 <div>
 
                     <span>
-                        OUTPUT
+                        ALERT RULE
                     </span>
 
                     <strong>
-                        Pain Score
+                        median of {{ alert_window }} &ge; {{ alert_on }}, off &lt; {{ alert_off }}
                     </strong>
 
                 </div>
@@ -425,11 +428,12 @@
         <footer>
 
             <span>
-                PainSense • Research Prototype
+                PainSense &bull; Research prototype &bull;
+                not a clinical pain measurement
             </span>
 
             <span>
-                CNN → LSTM → Pain Score → Alert
+                Camera &rarr; ResNet18 &rarr; LSTM &rarr; Intensity &rarr; Alert
             </span>
 
         </footer>
@@ -441,7 +445,16 @@
     <!-- =========================
          JAVASCRIPT
     ========================== -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        window.PAINSENSE = {
+            historyPoints: {{ history_points | tojson }},
+            staleSec: {{ stale_sec | tojson }}
+        };
+    </script>
+
+    <!-- Pinned version. The dashboard still polls and fills the cards and
+         table if this CDN is unreachable; only the chart is skipped. -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
     <script src="{{ url_for('static', filename='js/dashboard.js') }}">
     </script>

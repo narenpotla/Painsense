@@ -1,6 +1,12 @@
+"""
+PainSense - latest live result, shared with the Flask dashboard through
+logs/dashboard_state.json (written atomically).
+"""
+
 import json
 import os
 import tempfile
+import time
 from datetime import datetime
 
 import config
@@ -13,24 +19,42 @@ STATE_FILE = os.path.join(
 )
 
 
+def _empty_state():
+    return {
+        "score": None,
+        "probability": None,
+        "prediction": None,
+        "sequence_current": 0,
+        "sequence_total": config.SEQ_LEN,
+        "alert": False,
+        "alert_reason": None,
+        "updated_at": None,
+        "updated_ts": None
+    }
+
+
 def write_state(
     score=None,
     probability=None,
     prediction=None,
     sequence_current=0,
-    sequence_total=8,
+    sequence_total=config.SEQ_LEN,
     alert=False,
     alert_reason=None
 ):
     """
-    Save the latest CNN-LSTM prediction so the Flask
-    dashboard can read it.
+    Save the latest prediction so the Flask dashboard can read it.
+
+    updated_ts (epoch seconds) lets the dashboard tell a live feed
+    from a stopped one.
     """
 
     os.makedirs(
         os.path.dirname(STATE_FILE),
         exist_ok=True
     )
+
+    now = time.time()
 
     state = {
         "score": score,
@@ -40,9 +64,8 @@ def write_state(
         "sequence_total": sequence_total,
         "alert": alert,
         "alert_reason": alert_reason,
-        "updated_at": datetime.now().strftime(
-            "%H:%M:%S"
-        )
+        "updated_at": datetime.fromtimestamp(now).strftime("%H:%M:%S"),
+        "updated_ts": now
     }
 
     # Write to a temporary file first.
@@ -55,22 +78,10 @@ def write_state(
 
     try:
 
-        with os.fdopen(
-            fd,
-            "w",
-            encoding="utf-8"
-        ) as file:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(state, file, indent=2)
 
-            json.dump(
-                state,
-                file,
-                indent=2
-            )
-
-        os.replace(
-            temp_path,
-            STATE_FILE
-        )
+        os.replace(temp_path, STATE_FILE)
 
     finally:
 
@@ -84,40 +95,16 @@ def read_state():
     """
 
     if not os.path.exists(STATE_FILE):
-
-        return {
-            "score": None,
-            "probability": None,
-            "prediction": None,
-            "sequence_current": 0,
-            "sequence_total": 8,
-            "alert": False,
-            "alert_reason": None,
-            "updated_at": None
-        }
+        return _empty_state()
 
     try:
 
-        with open(
-            STATE_FILE,
-            "r",
-            encoding="utf-8"
-        ) as file:
+        with open(STATE_FILE, "r", encoding="utf-8") as file:
+            state = json.load(file)
 
-            return json.load(file)
+    except (json.JSONDecodeError, OSError):
+        return _empty_state()
 
-    except (
-        json.JSONDecodeError,
-        OSError
-    ):
-
-        return {
-            "score": None,
-            "probability": None,
-            "prediction": None,
-            "sequence_current": 0,
-            "sequence_total": 8,
-            "alert": False,
-            "alert_reason": None,
-            "updated_at": None
-        }
+    merged = _empty_state()
+    merged.update(state)
+    return merged

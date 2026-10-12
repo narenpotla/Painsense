@@ -2,11 +2,15 @@ import os
 import glob
 import shutil
 
-# Original SynPain videos
-SOURCE_DIR = "data/videos/raw/SynPain/Videos"
+import config
 
-# New unlabeled dataset
-DEST_DIR = "data/videos/unlabeled/videos"
+# Original SynPain videos
+SOURCE_DIR = os.path.join(config.ROOT, "data", "videos", "raw", "SynPain", "Videos")
+
+# New unlabeled dataset.
+# NOTE: these are the SAME 40 clips as the labeled ones, renamed in
+# sorted order. They are not a held-out test set.
+DEST_DIR = os.path.join(config.ROOT, "data", "videos", "unlabeled", "videos")
 
 # Create destination folder
 os.makedirs(DEST_DIR, exist_ok=True)

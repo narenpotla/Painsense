@@ -39,9 +39,12 @@ Model choice:
         frame spacing, so live scores are not trustworthy)
 
 Run:
-    python realtime_infer.py
+    python realtime_infer.py                       # webcam, OpenCV window
+    python realtime_infer.py --camera 1            # another webcam
+    python realtime_infer.py --video clip.mp4      # replay a file
+    python realtime_infer.py --video clip.mp4 --headless
 
-Press 'q' to quit.
+Press 'q' to quit (or Ctrl+C with --headless).
 """
 
 import argparse
@@ -58,6 +61,7 @@ import config
 import db
 import alert_rules
 import dashboard_state
+import data_prep
 
 from data_prep import crop_face
 from dataset import frame_transform
@@ -188,7 +192,10 @@ def load_scorer():
                 f"{config.SEQ_STRIDE}; live spacing differs from training."
             )
 
-        backbone = imagenet_backbone().to(config.DEVICE)
+        # Stored backbone weights: no download needed (offline demo).
+        backbone = imagenet_backbone(
+            payload.get("backbone_state_dict")
+        ).to(config.DEVICE)
         head = FeatureIntensityModel(
             payload.get("variant", "lstm")
         ).to(config.DEVICE)
@@ -415,42 +422,77 @@ def _clear_dashboard(sequence_current=0):
     )
 
 
+def _open_source(camera_index, video_path):
+    """Open a webcam or a video file. Returns (cap, is_file, fps)."""
+
+    if video_path is not None:
+        cap = cv2.VideoCapture(str(video_path))
+
+        if not cap.isOpened():
+            raise RuntimeError(f"Could not open video file: {video_path}")
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or float(config.VIDEO_FPS)
+        return cap, True, float(fps)
+
+    cap = cv2.VideoCapture(camera_index)
+
+    if not cap.isOpened():
+        raise RuntimeError(
+            f"Could not open camera index {camera_index}. "
+            "Try --camera 1 (or 2), close other apps using the camera, "
+            "or check the OS camera privacy setting."
+        )
+
+    return cap, False, None
+
+
 def run(
     camera_index=0,
-    use_model=True
+    use_model=True,
+    video_path=None,
+    headless=False,
+    log=True,
+    verbose=True
 ):
+    """
+    Live loop.
 
-    # -----------------------------------------------------
-    # INITIALIZE DATABASE
-    # -----------------------------------------------------
+    camera_index: webcam index (ignored when video_path is given).
+    video_path:   replay a video file instead of a webcam. Frames are
+                  sampled every round(fps * CAPTURE_INTERVAL_SEC) frames,
+                  so spacing matches training regardless of CPU speed.
+    headless:     no OpenCV window (stop a webcam run with Ctrl+C).
+    log:          write the SQLite log and the dashboard state.
 
-    db.init_db()
+    Returns a list of per-sample records:
+        {"frame": i, "t": seconds, "face": bool, "score": float|None,
+         "median": float|None, "alert": bool}
+    """
 
-    # -----------------------------------------------------
-    # LOAD MODEL
-    # -----------------------------------------------------
+    if log:
+        db.init_db()
 
     scorer = load_scorer() if use_model else None
 
     alert_state = alert_rules.AlertState()
 
-    # -----------------------------------------------------
-    # OPEN WEBCAM
-    # -----------------------------------------------------
+    cap, is_file, fps = _open_source(camera_index, video_path)
 
-    cap = cv2.VideoCapture(camera_index)
-
-    if not cap.isOpened():
-
-        raise RuntimeError(
-            f"Could not open camera "
-            f"index {camera_index}"
-        )
+    # A webcam uses the stricter live face size; a video file uses the
+    # same detector settings as the stored training crops.
+    min_face = (
+        data_prep.DETECT_MIN_SIZE if is_file else config.LIVE_MIN_FACE_SIZE
+    )
+    step = (
+        max(1, round(fps * config.CAPTURE_INTERVAL_SEC)) if is_file else None
+    )
 
     # Cached backbone features of the last SEQ_LEN valid faces.
     feature_buffer = deque(maxlen=config.SEQ_LEN)
 
     last_sample_t = 0.0
+    frame_index = -1
+    records = []
 
     last_prediction = None
     last_probability = None
@@ -460,170 +502,209 @@ def run(
 
     face_detected = False
 
-    _clear_dashboard()
+    def clear_dashboard(sequence_current=0):
+        if log:
+            _clear_dashboard(sequence_current)
 
-    print()
-    print("PainSense live inference running.")
-    print("Dashboard state integration active.")
-    print(
-        f"Sampling every {config.CAPTURE_INTERVAL_SEC:.2f} s; "
-        f"first score after {config.SEQ_LEN} valid faces "
-        f"({config.SEQ_LEN * config.CAPTURE_INTERVAL_SEC:.1f} s)."
-    )
-    print(
-        f"Alert: median of last {config.ALERT_MEDIAN_WINDOW} scores "
-        f">= {SCORE_THRESHOLD:.1f}, off below "
-        f"{config.ALERT_OFF_THRESHOLD:.1f} "
-        f"(score range 0-{config.PAIN_SCORE_MAX:.0f}, synthetic morph scale)"
-    )
-    print("Press 'q' to quit.")
-    print()
+    clear_dashboard()
+
+    if verbose:
+        print()
+        print("PainSense live inference running.")
+        if is_file:
+            print(f"Source: {video_path} ({fps:.1f} fps, every {step} frames)")
+        print(
+            f"Sampling every {config.CAPTURE_INTERVAL_SEC:.2f} s; "
+            f"first score after {config.SEQ_LEN} valid faces "
+            f"({config.SEQ_LEN * config.CAPTURE_INTERVAL_SEC:.1f} s)."
+        )
+        print(
+            f"Alert: median of last {config.ALERT_MEDIAN_WINDOW} scores "
+            f">= {SCORE_THRESHOLD:.1f}, off below "
+            f"{config.ALERT_OFF_THRESHOLD:.1f} "
+            f"(score range 0-{config.PAIN_SCORE_MAX:.0f}, "
+            "synthetic morph scale)"
+        )
+        print("Press 'q' to quit." if not headless else "Ctrl+C to stop.")
+        print()
 
     # =====================================================
     # CAMERA LOOP
     # =====================================================
 
-    while True:
+    try:
+        while True:
 
-        ok, frame = cap.read()
+            ok, frame = cap.read()
 
-        if not ok:
+            if not ok:
+                if verbose:
+                    print(
+                        "End of video." if is_file
+                        else "Camera read failed, stopping."
+                    )
+                break
 
-            print("Camera read failed, stopping.")
+            frame_index += 1
 
-            break
-
-        now = time.time()
-
-        capturing = (
-            now - last_sample_t
-        ) >= config.CAPTURE_INTERVAL_SEC
-
-        if capturing:
-
-            last_sample_t = now
-
-            face = crop_face(frame)
-
-            # =============================================
-            # NO FACE DETECTED
-            # =============================================
-
-            if face is None:
-
-                face_detected = False
-
-                feature_buffer.clear()
-                alert_state.reset()
-
-                last_prediction = None
-                last_probability = None
-                last_alert = False
-                last_reason = None
-
-                _clear_dashboard()
-
-                print(
-                    "[DASHBOARD] No face detected -> buffer cleared "
-                    "-> no inference -> alert reset"
-                )
-
-            # =============================================
-            # FACE DETECTED
-            # =============================================
-
+            if is_file:
+                capturing = frame_index % step == 0
+                now = frame_index / fps
             else:
+                now = time.time()
+                capturing = (
+                    now - last_sample_t
+                ) >= config.CAPTURE_INTERVAL_SEC
 
-                face_detected = True
+            if capturing:
 
-                # ResNet runs ONCE per new frame; only the
-                # temporal head sees the whole window.
-                if scorer is not None:
-                    feature_buffer.append(scorer.encode(face))
-                else:
-                    feature_buffer.append(None)
+                last_sample_t = now
 
-                if len(feature_buffer) < config.SEQ_LEN:
+                face = data_prep.crop_face(frame, min_size=min_face)
+                record = {
+                    "frame": frame_index,
+                    "t": round(frame_index / fps, 3) if is_file else now,
+                    "face": face is not None,
+                    "score": None,
+                    "median": None,
+                    "alert": False,
+                }
+
+                # =========================================
+                # NO FACE DETECTED
+                # =========================================
+
+                if face is None:
+
+                    if face_detected and verbose:
+                        print(
+                            "[LIVE] No face detected -> buffer cleared "
+                            "-> no inference -> alert reset"
+                        )
+
+                    face_detected = False
+
+                    feature_buffer.clear()
+                    alert_state.reset()
 
                     last_prediction = None
                     last_probability = None
                     last_alert = False
                     last_reason = None
 
-                    _clear_dashboard(len(feature_buffer))
+                    clear_dashboard()
 
-                elif scorer is not None:
+                # =========================================
+                # FACE DETECTED
+                # =========================================
 
-                    score = scorer.score(feature_buffer)
+                else:
 
-                    last_alert, last_reason = alert_state.update(
-                        score,
-                        face_detected=True
-                    )
+                    face_detected = True
 
-                    prediction = "PAIN" if last_alert else "NO PAIN"
+                    # ResNet runs ONCE per new frame; only the
+                    # temporal head sees the whole window.
+                    if scorer is not None:
+                        feature_buffer.append(scorer.encode(face))
+                    else:
+                        feature_buffer.append(None)
 
-                    last_prediction = prediction
-                    last_probability = score
+                    if len(feature_buffer) < config.SEQ_LEN:
 
-                    try:
+                        last_prediction = None
+                        last_probability = None
+                        last_alert = False
+                        last_reason = None
 
-                        db.log_score(
+                        clear_dashboard(len(feature_buffer))
+
+                    elif scorer is not None:
+
+                        score = scorer.score(feature_buffer)
+
+                        last_alert, last_reason = alert_state.update(
                             score,
-                            last_alert,
-                            last_reason,
-                            prediction=prediction
+                            face_detected=True
                         )
 
-                    except Exception as db_error:
+                        prediction = "PAIN" if last_alert else "NO PAIN"
 
-                        print(f"[DATABASE] Warning: {db_error}")
+                        last_prediction = prediction
+                        last_probability = score
 
-                    dashboard_state.write_state(
-                        score=round(score, 2),
-                        probability=score / float(config.PAIN_SCORE_MAX),
-                        prediction=prediction,
-                        sequence_current=config.SEQ_LEN,
-                        sequence_total=config.SEQ_LEN,
-                        alert=last_alert,
-                        alert_reason=last_reason
-                    )
+                        record.update(
+                            score=score,
+                            median=alert_state.median,
+                            alert=last_alert
+                        )
 
-                    print(
-                        f"[DASHBOARD] "
-                        f"Score={score:.1f} "
-                        f"Median={alert_state.median:.1f} "
-                        f"Prediction={prediction} "
-                        f"Alert={last_alert}"
-                    )
+                        if log:
+                            try:
+                                db.log_score(
+                                    score,
+                                    last_alert,
+                                    last_reason,
+                                    prediction=prediction
+                                )
+                            except Exception as db_error:
+                                print(f"[DATABASE] Warning: {db_error}")
 
-        # =================================================
-        # DRAW CAMERA WINDOW
-        # =================================================
+                            dashboard_state.write_state(
+                                score=round(score, 2),
+                                probability=score / float(
+                                    config.PAIN_SCORE_MAX
+                                ),
+                                prediction=prediction,
+                                sequence_current=config.SEQ_LEN,
+                                sequence_total=config.SEQ_LEN,
+                                alert=last_alert,
+                                alert_reason=last_reason
+                            )
 
-        frame = draw_overlay(
-            frame,
-            last_prediction,
-            last_probability,
-            face_detected,
-            capturing,
-            last_alert,
-            last_reason,
-            len(feature_buffer),
-            config.SEQ_LEN
-        )
+                        if verbose:
+                            print(
+                                f"[LIVE] "
+                                f"Score={score:.1f} "
+                                f"Median={alert_state.median:.1f} "
+                                f"Prediction={prediction} "
+                                f"Alert={last_alert}"
+                            )
 
-        cv2.imshow(
-            "PainSense - live inference",
-            frame
-        )
+                records.append(record)
 
-        if (
-            cv2.waitKey(1) & 0xFF
-            == ord("q")
-        ):
+            if headless:
+                continue
 
-            break
+            # =================================================
+            # DRAW CAMERA WINDOW
+            # =================================================
+
+            frame = draw_overlay(
+                frame,
+                last_prediction,
+                last_probability,
+                face_detected,
+                True,   # loop is running; indicator follows face_detected
+                last_alert,
+                last_reason,
+                len(feature_buffer),
+                config.SEQ_LEN
+            )
+
+            cv2.imshow(
+                "PainSense - live inference",
+                frame
+            )
+
+            if (
+                cv2.waitKey(1) & 0xFF
+                == ord("q")
+            ):
+                break
+
+    except KeyboardInterrupt:
+        if verbose:
+            print("Stopped by user.")
 
     # =====================================================
     # CLEANUP
@@ -631,12 +712,16 @@ def run(
 
     cap.release()
 
-    cv2.destroyAllWindows()
+    if not headless:
+        cv2.destroyAllWindows()
 
-    _clear_dashboard()
+    clear_dashboard()
 
-    print()
-    print("PainSense live inference stopped.")
+    if verbose:
+        print()
+        print("PainSense live inference stopped.")
+
+    return records
 
 
 # =========================================================
@@ -651,6 +736,18 @@ if __name__ == "__main__":
         "--camera",
         type=int,
         default=0
+    )
+
+    ap.add_argument(
+        "--video",
+        default=None,
+        help="replay a video file instead of the webcam"
+    )
+
+    ap.add_argument(
+        "--headless",
+        action="store_true",
+        help="no OpenCV window (Ctrl+C stops a webcam run)"
     )
 
     ap.add_argument(
@@ -670,5 +767,7 @@ if __name__ == "__main__":
 
     run(
         camera_index=args.camera,
-        use_model=not args.no_model
+        use_model=not args.no_model,
+        video_path=args.video,
+        headless=args.headless
     )

@@ -77,7 +77,7 @@ def cache_path(video_name):
     return os.path.join(config.FEATURE_DIR, f"{video_name}.npz")
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def _encode(backbone, images, batch_size=64):
     out = []
 
@@ -499,6 +499,9 @@ def main():
                 "stride": args.stride,
                 "scale": scale,
                 "bias": bias,
+                # Frozen ImageNet weights stored with the head so the
+                # live demo needs no download.
+                "backbone_state_dict": imagenet_backbone().state_dict(),
             },
             config.FEATURE_CKPT
         )

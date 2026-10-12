@@ -759,3 +759,31 @@ footer {
     }
 
 }
+
+/* =========================================================
+   OFFLINE / STALE STATE (live feed not running)
+========================================================= */
+
+.capture-status.offline {
+    color: #8b95a7;
+}
+
+.capture-status.offline .status-dot {
+    background: #b4bccb;
+
+    box-shadow: none;
+}
+
+.card-status.offline {
+    color: #8b95a7;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 9px;
+}
+
+.card-status.offline .small-dot {
+    background: #b4bccb;
+}

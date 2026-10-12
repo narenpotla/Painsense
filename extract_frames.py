@@ -2,11 +2,15 @@ import cv2
 import os
 import glob
 
-# Folder containing the 40 unlabeled videos
-VIDEO_DIR = "data/videos/unlabeled/videos"
+import config
+
+# Folder containing the 40 unlabeled videos (label-free copies of the
+# SynPAIN clips, see unlabeled_videos.py). Paths are relative to the
+# project root so the script works from any working directory.
+VIDEO_DIR = os.path.join(config.ROOT, "data", "videos", "unlabeled", "videos")
 
 # Folder where frames will be stored
-FRAME_DIR = "data/videos/frames"
+FRAME_DIR = os.path.join(config.ROOT, "data", "videos", "frames")
 
 # Create the main frames directory
 os.makedirs(FRAME_DIR, exist_ok=True)

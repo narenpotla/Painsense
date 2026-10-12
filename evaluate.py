@@ -288,7 +288,9 @@ def _load_intensity_scorer(ckpt):
     payload = torch.load(ckpt, map_location=config.DEVICE)
 
     if isinstance(payload, dict) and "variant" in payload:
-        backbone = imagenet_backbone().to(config.DEVICE)
+        backbone = imagenet_backbone(
+            payload.get("backbone_state_dict")
+        ).to(config.DEVICE)
         head = FeatureIntensityModel(payload["variant"]).to(config.DEVICE)
         head.load_state_dict(payload["state_dict"])
         head.eval()
