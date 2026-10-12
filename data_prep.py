@@ -83,7 +83,68 @@ def get_face_detector():
 # Face cropping
 # ---------------------------------------------------------------------
 
-def crop_face(img_bgr, size=config.IMG_SIZE):
+FACE_MARGIN = 0.15          # margin = FACE_MARGIN * max(w, h) on every side
+DETECT_MIN_SIZE = (40, 40)  # Haar minSize used when the training crops were made
+
+
+def detect_face_box(img_bgr, min_size=DETECT_MIN_SIZE):
+    """
+    Return the largest detected face as (x, y, w, h), or None.
+    """
+
+    if img_bgr is None or img_bgr.size == 0:
+        return None
+
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+    faces = get_face_detector().detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=min_size
+    )
+
+    if len(faces) == 0:
+        return None
+
+    x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+    return int(x), int(y), int(fw), int(fh)
+
+
+def crop_from_box(img_bgr, box, size=config.CROP_SIZE):
+    """
+    Crop a face box with margin and resize to size x size.
+
+    This is the single crop recipe used everywhere (offline face-frame
+    extraction, live inference, video testing). It reproduces the crops
+    in data/videos/face_frames: margin = 0.15 * max(w, h) on all sides,
+    clipped to the image, then cv2.resize (default interpolation) to
+    CROP_SIZE = 128. The model transform later upsamples to IMG_SIZE = 224,
+    exactly as it does for the stored training crops.
+
+    Returns:
+        numpy array (size, size, 3), or None if the crop is empty.
+    """
+
+    x, y, w, h = box
+    margin = int(FACE_MARGIN * max(w, h))
+
+    ih, iw = img_bgr.shape[:2]
+
+    x1 = max(0, x - margin)
+    y1 = max(0, y - margin)
+    x2 = min(iw, x + w + margin)
+    y2 = min(ih, y + h + margin)
+
+    crop = img_bgr[y1:y2, x1:x2]
+
+    if crop.size == 0:
+        return None
+
+    return cv2.resize(crop, (size, size))
+
+
+def crop_face(img_bgr, size=config.CROP_SIZE, min_size=DETECT_MIN_SIZE):
     """
     Detect the largest face and return a resized square crop.
 
@@ -98,63 +159,12 @@ def crop_face(img_bgr, size=config.IMG_SIZE):
         numpy array of shape (size, size, 3), or None
     """
 
-    if img_bgr is None:
+    box = detect_face_box(img_bgr, min_size=min_size)
+
+    if box is None:
         return None
 
-    if img_bgr.size == 0:
-        return None
-
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-
-    detector = get_face_detector()
-
-    faces = detector.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(60, 60)
-    )
-
-    # -------------------------------------------------------------
-    # NO FACE
-    # -------------------------------------------------------------
-
-    if len(faces) == 0:
-        return None
-
-    # -------------------------------------------------------------
-    # Select largest detected face
-    # -------------------------------------------------------------
-
-    x, y, fw, fh = max(
-        faces,
-        key=lambda f: f[2] * f[3]
-    )
-
-    # Add padding around the face.
-    pad_x = int(0.20 * fw)
-    pad_y = int(0.20 * fh)
-
-    h, w = img_bgr.shape[:2]
-
-    x0 = max(0, x - pad_x)
-    y0 = max(0, y - pad_y)
-
-    x1 = min(w, x + fw + pad_x)
-    y1 = min(h, y + fh + pad_y)
-
-    crop = img_bgr[y0:y1, x0:x1]
-
-    if crop.size == 0:
-        return None
-
-    crop = cv2.resize(
-        crop,
-        (size, size),
-        interpolation=cv2.INTER_AREA
-    )
-
-    return crop
+    return crop_from_box(img_bgr, box, size=size)
 
 
 # ---------------------------------------------------------------------

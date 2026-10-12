@@ -2,41 +2,44 @@
 PainSense - real-time inference + web dashboard integration.
 
 CURRENT MODEL OUTPUT:
-    Intensity score from 0 to 10
+    Expression intensity from 0 to 10, on a synthetic morph scale.
 
 The score estimates progress along the generated SynPAIN
-neutral-to-pain transition. It is not a clinical PSPI or VAS score.
+neutral-to-pain morph. It is not a clinical PSPI or VAS score.
 
 Pipeline:
 
     Camera
-       ↓
-    Face detection
-       ↓
-    Valid face?
-       ↓
-    8 consecutive valid face frames
-       ↓
-    CNN-LSTM
-       ↓
-    No Pain / Pain probability
-       ↓
-    Alert rules
-       ↓
-    Dashboard state
-       ↓
-    Flask dashboard
+       |
+    Face detection + crop (same recipe as the training crops)
+       |
+    ResNet18 features, computed ONCE per new frame and cached
+       |
+    LSTM over the last SEQ_LEN cached features
+       |
+    Score 0-10
+       |
+    Alert rule (median of last 5 scores + hysteresis)
+       |
+    SQLite log + dashboard state
+
+Frames are sampled every CAPTURE_INTERVAL_SEC (= SEQ_STRIDE / 24 s),
+the same spacing the training windows use.
 
 If no face is detected:
-    - The frame is NOT added to the buffer
-    - The existing buffer is cleared
-    - CNN-LSTM is NOT executed
-    - Prediction is cleared
-    - Pain probability is cleared
-    - Alert is cleared
+    - nothing is added to the feature buffer and the buffer is cleared
+    - the LSTM is NOT executed
+    - prediction, score and alert are cleared
+    - the alert state (median history, hysteresis) is reset
+
+Model choice:
+    checkpoints/pain_intensity_features.pt   (preferred; made by
+        cv_intensity.py --final, trained at the live frame spacing)
+    checkpoints/pain_intensity.pt            (fallback; trained at 1/24 s
+        frame spacing, so live scores are not trustworthy)
 
 Run:
-    venv/Scripts/python.exe realtime_infer.py
+    python realtime_infer.py
 
 Press 'q' to quit.
 """
@@ -58,7 +61,12 @@ import dashboard_state
 
 from data_prep import crop_face
 from dataset import frame_transform
-from model import PainIntensityLSTM
+from model import (
+    FeatureIntensityModel,
+    PainIntensityLSTM,
+    imagenet_backbone
+)
+from utils import seed_everything
 
 
 # =========================================================
@@ -73,10 +81,7 @@ SCORE_THRESHOLD = config.ALERT_THRESHOLD
 # =========================================================
 
 def load_calibration():
-    path = os.path.join(
-        config.CHECKPOINT_DIR,
-        "pain_intensity_calibration.json"
-    )
+    path = config.calibration_path_for(config.INTENSITY_CKPT)
 
     if not os.path.exists(path):
         return 1.0, 0.0
@@ -91,6 +96,7 @@ def load_calibration():
 
 
 def load_model():
+    """Load the old full CNN-LSTM checkpoint (fallback model)."""
 
     model = PainIntensityLSTM().to(config.DEVICE)
 
@@ -121,6 +127,105 @@ def load_model():
     model.eval()
 
     return model
+
+
+class LiveScorer:
+    """
+    Two-step scorer: encode(face) once per new frame, then
+    score(list_of_features) runs only the temporal head.
+    """
+
+    def __init__(self, encode_fn, score_fn, scale, bias, description):
+        self._encode = encode_fn
+        self._score = score_fn
+        self.scale = scale
+        self.bias = bias
+        self.description = description
+
+    @torch.no_grad()
+    def encode(self, face_bgr):
+        rgb = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
+        x = frame_transform(Image.fromarray(rgb)).unsqueeze(0)
+        return self._encode(x.to(config.DEVICE))[0].cpu()
+
+    @torch.no_grad()
+    def score(self, features):
+        """features: list of SEQ_LEN tensors (512,), oldest first."""
+
+        window = torch.stack(list(features)).unsqueeze(0).to(config.DEVICE)
+        raw = float(self._score(window)[0, -1].item())
+        value = self.scale * raw + self.bias
+
+        return max(
+            float(config.PAIN_SCORE_MIN),
+            min(float(config.PAIN_SCORE_MAX), value)
+        )
+
+
+def load_scorer():
+    """
+    Prefer the feature checkpoint trained at the live frame spacing.
+    Fall back to the old checkpoint with a warning.
+    """
+
+    if os.path.exists(config.FEATURE_CKPT):
+        payload = torch.load(
+            config.FEATURE_CKPT,
+            map_location=config.DEVICE
+        )
+
+        if payload.get("seq_len") != config.SEQ_LEN:
+            raise RuntimeError(
+                f"{config.FEATURE_CKPT} was trained with seq_len="
+                f"{payload.get('seq_len')} but config.SEQ_LEN="
+                f"{config.SEQ_LEN}"
+            )
+
+        if payload.get("stride") != config.SEQ_STRIDE:
+            print(
+                f"WARNING: feature checkpoint stride "
+                f"{payload.get('stride')} != config.SEQ_STRIDE "
+                f"{config.SEQ_STRIDE}; live spacing differs from training."
+            )
+
+        backbone = imagenet_backbone().to(config.DEVICE)
+        head = FeatureIntensityModel(
+            payload.get("variant", "lstm")
+        ).to(config.DEVICE)
+        head.load_state_dict(payload["state_dict"])
+        head.eval()
+
+        print(f"Loaded feature checkpoint: {config.FEATURE_CKPT}")
+
+        return LiveScorer(
+            backbone,
+            head,
+            float(payload.get("scale", 1.0)),
+            float(payload.get("bias", 0.0)),
+            "features:" + payload.get("variant", "lstm")
+        )
+
+    print(
+        f"WARNING: {config.FEATURE_CKPT} not found. Falling back to "
+        f"{config.INTENSITY_CKPT}."
+    )
+    print(
+        "WARNING: that model was trained on frames 1/24 s apart, but live "
+        f"frames are {config.CAPTURE_INTERVAL_SEC:.2f} s apart, so its "
+        "scores are not trustworthy. Create the feature checkpoint with: "
+        "python cv_intensity.py --epochs 30 --seeds 3 --final"
+    )
+
+    model = load_model()
+    scale, bias = load_calibration()
+
+    return LiveScorer(
+        model.encode_backbone,
+        model.score_features,
+        scale,
+        bias,
+        "full model (legacy)"
+    )
 
 
 # =========================================================
@@ -228,7 +333,7 @@ def draw_overlay(
 
         cv2.putText(
             frame,
-            "Waiting for CNN-LSTM inference...",
+            "Waiting for LSTM inference...",
             (25, 98),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
@@ -253,7 +358,7 @@ def draw_overlay(
         )
 
         probability_text = (
-            f"Pain score: "
+            f"Intensity (synthetic scale): "
             f"{probability:.1f} / {config.PAIN_SCORE_MAX:.0f}"
         )
 
@@ -298,6 +403,18 @@ def draw_overlay(
 # MAIN INFERENCE
 # =========================================================
 
+def _clear_dashboard(sequence_current=0):
+    dashboard_state.write_state(
+        score=None,
+        probability=None,
+        prediction=None,
+        sequence_current=sequence_current,
+        sequence_total=config.SEQ_LEN,
+        alert=False,
+        alert_reason=None
+    )
+
+
 def run(
     camera_index=0,
     use_model=True
@@ -313,21 +430,15 @@ def run(
     # LOAD MODEL
     # -----------------------------------------------------
 
-    model = (
-        load_model()
-        if use_model
-        else None
-    )
+    scorer = load_scorer() if use_model else None
 
-    score_scale, score_bias = load_calibration()
+    alert_state = alert_rules.AlertState()
 
     # -----------------------------------------------------
     # OPEN WEBCAM
     # -----------------------------------------------------
 
-    cap = cv2.VideoCapture(
-        camera_index
-    )
+    cap = cv2.VideoCapture(camera_index)
 
     if not cap.isOpened():
 
@@ -336,19 +447,10 @@ def run(
             f"index {camera_index}"
         )
 
-    # =====================================================
-    # FRAME BUFFER
-    # =====================================================
-
-    frame_buffer = deque(
-        maxlen=config.SEQ_LEN
-    )
+    # Cached backbone features of the last SEQ_LEN valid faces.
+    feature_buffer = deque(maxlen=config.SEQ_LEN)
 
     last_sample_t = 0.0
-
-    # -----------------------------------------------------
-    # Current prediction state
-    # -----------------------------------------------------
 
     last_prediction = None
     last_probability = None
@@ -358,45 +460,23 @@ def run(
 
     face_detected = False
 
-    # =====================================================
-    # INITIAL DASHBOARD STATE
-    # =====================================================
-
-    dashboard_state.write_state(
-
-        score=None,
-
-        probability=None,
-
-        prediction=None,
-
-        sequence_current=0,
-
-        sequence_total=config.SEQ_LEN,
-
-        alert=False,
-
-        alert_reason=None
-    )
+    _clear_dashboard()
 
     print()
+    print("PainSense live inference running.")
+    print("Dashboard state integration active.")
     print(
-        "PainSense live inference running."
+        f"Sampling every {config.CAPTURE_INTERVAL_SEC:.2f} s; "
+        f"first score after {config.SEQ_LEN} valid faces "
+        f"({config.SEQ_LEN * config.CAPTURE_INTERVAL_SEC:.1f} s)."
     )
-
     print(
-        "Dashboard state integration active."
+        f"Alert: median of last {config.ALERT_MEDIAN_WINDOW} scores "
+        f">= {SCORE_THRESHOLD:.1f}, off below "
+        f"{config.ALERT_OFF_THRESHOLD:.1f} "
+        f"(score range 0-{config.PAIN_SCORE_MAX:.0f}, synthetic morph scale)"
     )
-
-    print(
-        f"Pain score threshold: "
-        f"{SCORE_THRESHOLD:.1f} / {config.PAIN_SCORE_MAX:.0f}"
-    )
-
-    print(
-        "Press 'q' to quit."
-    )
-
+    print("Press 'q' to quit.")
     print()
 
     # =====================================================
@@ -409,9 +489,7 @@ def run(
 
         if not ok:
 
-            print(
-                "Camera read failed, stopping."
-            )
+            print("Camera read failed, stopping.")
 
             break
 
@@ -421,216 +499,72 @@ def run(
             now - last_sample_t
         ) >= config.CAPTURE_INTERVAL_SEC
 
-        # =================================================
-        # SAMPLE FRAME
-        # =================================================
-
         if capturing:
 
             last_sample_t = now
 
-            # -------------------------------------------------
-            # DETECT AND CROP FACE
-            # -------------------------------------------------
-
             face = crop_face(frame)
 
-            # =================================================
-            # IMPORTANT:
+            # =============================================
             # NO FACE DETECTED
-            # =================================================
+            # =============================================
 
             if face is None:
 
                 face_detected = False
 
-                # -------------------------------------------------
-                # CLEAR BUFFER
-                # -------------------------------------------------
-
-                frame_buffer.clear()
-
-                # -------------------------------------------------
-                # CLEAR MODEL RESULT
-                # -------------------------------------------------
+                feature_buffer.clear()
+                alert_state.reset()
 
                 last_prediction = None
                 last_probability = None
-
-                # -------------------------------------------------
-                # CLEAR ALERT
-                # -------------------------------------------------
-
                 last_alert = False
                 last_reason = None
 
-                # -------------------------------------------------
-                # UPDATE DASHBOARD
-                # -------------------------------------------------
-
-                dashboard_state.write_state(
-
-                    score=None,
-
-                    probability=None,
-
-                    prediction=None,
-
-                    sequence_current=0,
-
-                    sequence_total=config.SEQ_LEN,
-
-                    alert=False,
-
-                    alert_reason=None
-                )
-
-                # -------------------------------------------------
-                # Terminal message
-                # -------------------------------------------------
+                _clear_dashboard()
 
                 print(
-                    "[DASHBOARD] "
-                    "No face detected -> "
-                    "buffer cleared -> "
-                    "no inference -> "
-                    "no alert"
+                    "[DASHBOARD] No face detected -> buffer cleared "
+                    "-> no inference -> alert reset"
                 )
 
-            # =================================================
+            # =============================================
             # FACE DETECTED
-            # =================================================
+            # =============================================
 
             else:
 
                 face_detected = True
 
-                # -------------------------------------------------
-                # ADD ONLY VALID FACE TO BUFFER
-                # -------------------------------------------------
+                # ResNet runs ONCE per new frame; only the
+                # temporal head sees the whole window.
+                if scorer is not None:
+                    feature_buffer.append(scorer.encode(face))
+                else:
+                    feature_buffer.append(None)
 
-                frame_buffer.append(face)
-
-                # -------------------------------------------------
-                # BEFORE MODEL INFERENCE
-                # -------------------------------------------------
-
-                if len(frame_buffer) < config.SEQ_LEN:
-
-                    # We have a face but not enough frames yet.
+                if len(feature_buffer) < config.SEQ_LEN:
 
                     last_prediction = None
                     last_probability = None
-
                     last_alert = False
                     last_reason = None
 
-                    dashboard_state.write_state(
+                    _clear_dashboard(len(feature_buffer))
 
-                        score=None,
+                elif scorer is not None:
 
-                        probability=None,
+                    score = scorer.score(feature_buffer)
 
-                        prediction=None,
-
-                        sequence_current=len(
-                            frame_buffer
-                        ),
-
-                        sequence_total=config.SEQ_LEN,
-
-                        alert=False,
-
-                        alert_reason=None
+                    last_alert, last_reason = alert_state.update(
+                        score,
+                        face_detected=True
                     )
 
-                # =================================================
-                # RUN CNN-LSTM
-                # =================================================
-
-                elif model is not None:
-
-                    # -------------------------------------------------
-                    # CONVERT FACE FRAMES TO TENSORS
-                    # -------------------------------------------------
-
-                    seq_tensors = torch.stack(
-                        [
-                            frame_transform(
-                                Image.fromarray(
-                                    cv2.cvtColor(
-                                        f,
-                                        cv2.COLOR_BGR2RGB
-                                    )
-                                )
-                            )
-
-                            for f in frame_buffer
-                        ]
-                    )
-
-                    # -------------------------------------------------
-                    # ADD BATCH DIMENSION
-                    # -------------------------------------------------
-
-                    seq_tensors = (
-                        seq_tensors
-                        .unsqueeze(0)
-                        .to(config.DEVICE)
-                    )
-
-                    # =================================================
-                    # MODEL INFERENCE
-                    # =================================================
-
-                    with torch.no_grad():
-
-                        outputs = model(
-                            seq_tensors
-                        )
-
-                    # =================================================
-                    # LATEST FRAME SCORE, CLAMPED TO 0-10
-                    # =================================================
-
-                    if outputs.ndim != 2:
-
-                        raise RuntimeError(
-                            "Unexpected intensity output shape: "
-                            f"{tuple(outputs.shape)}. "
-                            "Expected [batch, sequence]."
-                        )
-
-                    raw_score = float(outputs[0, -1].item())
-                    score = score_scale * raw_score + score_bias
-                    score = max(
-                        float(config.PAIN_SCORE_MIN),
-                        min(float(config.PAIN_SCORE_MAX), score)
-                    )
-
-                    prediction = (
-                        "PAIN"
-                        if score >= SCORE_THRESHOLD
-                        else "NO PAIN"
-                    )
+                    prediction = "PAIN" if last_alert else "NO PAIN"
 
                     last_prediction = prediction
                     last_probability = score
-
-                    # =================================================
-                    # ALERT RULES
-                    # =================================================
-
-                    last_alert, last_reason = (
-                        alert_rules.evaluate(
-                            score,
-                            face_detected=True
-                        )
-                    )
-
-                    # =================================================
-                    # DATABASE
-                    # =================================================
 
                     try:
 
@@ -643,39 +577,22 @@ def run(
 
                     except Exception as db_error:
 
-                        print(
-                            "[DATABASE] "
-                            f"Warning: {db_error}"
-                        )
-
-                    # =================================================
-                    # SEND RESULT TO DASHBOARD
-                    # =================================================
+                        print(f"[DATABASE] Warning: {db_error}")
 
                     dashboard_state.write_state(
-
                         score=round(score, 2),
-
                         probability=score / float(config.PAIN_SCORE_MAX),
-
                         prediction=prediction,
-
                         sequence_current=config.SEQ_LEN,
-
                         sequence_total=config.SEQ_LEN,
-
                         alert=last_alert,
-
                         alert_reason=last_reason
                     )
-
-                    # =================================================
-                    # TERMINAL OUTPUT
-                    # =================================================
 
                     print(
                         f"[DASHBOARD] "
                         f"Score={score:.1f} "
+                        f"Median={alert_state.median:.1f} "
                         f"Prediction={prediction} "
                         f"Alert={last_alert}"
                     )
@@ -685,38 +602,21 @@ def run(
         # =================================================
 
         frame = draw_overlay(
-
             frame,
-
             last_prediction,
-
             last_probability,
-
             face_detected,
-
             capturing,
-
             last_alert,
-
             last_reason,
-
-            len(frame_buffer),
-
+            len(feature_buffer),
             config.SEQ_LEN
         )
-
-        # -------------------------------------------------
-        # SHOW CAMERA
-        # -------------------------------------------------
 
         cv2.imshow(
             "PainSense - live inference",
             frame
         )
-
-        # -------------------------------------------------
-        # QUIT WITH Q
-        # -------------------------------------------------
 
         if (
             cv2.waitKey(1) & 0xFF
@@ -733,31 +633,10 @@ def run(
 
     cv2.destroyAllWindows()
 
-    # -----------------------------------------------------
-    # Clear dashboard after stopping
-    # -----------------------------------------------------
-
-    dashboard_state.write_state(
-
-        score=None,
-
-        probability=None,
-
-        prediction=None,
-
-        sequence_current=0,
-
-        sequence_total=config.SEQ_LEN,
-
-        alert=False,
-
-        alert_reason=None
-    )
+    _clear_dashboard()
 
     print()
-    print(
-        "PainSense live inference stopped."
-    )
+    print("PainSense live inference stopped.")
 
 
 # =========================================================
@@ -785,15 +664,11 @@ if __name__ == "__main__":
 
     args = ap.parse_args()
 
-    print(
-        f"Using device: "
-        f"{config.DEVICE}"
-    )
+    seed_everything(config.SEED)
+
+    print(f"Using device: {config.DEVICE}")
 
     run(
-
         camera_index=args.camera,
-
         use_model=not args.no_model
-
     )

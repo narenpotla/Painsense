@@ -23,92 +23,13 @@ import torch
 from PIL import Image
 
 import config
+from data_prep import crop_face
 from dataset import frame_transform
+from utils import seed_everything
 from model import PainCNNLSTM
 
 
-# =========================================================
-# FACE DETECTOR
-# =========================================================
-
-cascade_path = (
-    cv2.data.haarcascades
-    + "haarcascade_frontalface_default.xml"
-)
-
-face_detector = cv2.CascadeClassifier(
-    cascade_path
-)
-
-if face_detector.empty():
-
-    raise RuntimeError(
-        "Could not load OpenCV face detector."
-    )
-
-
-# =========================================================
-# FACE CROP
-# =========================================================
-
-def crop_face(frame):
-
-    gray = cv2.cvtColor(
-        frame,
-        cv2.COLOR_BGR2GRAY
-    )
-
-    faces = face_detector.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(40, 40)
-    )
-
-    if len(faces) == 0:
-        return None
-
-    # Select the largest detected face.
-    x, y, w, h = max(
-        faces,
-        key=lambda face: face[2] * face[3]
-    )
-
-    margin = int(
-        0.15 * max(w, h)
-    )
-
-    x1 = max(
-        0,
-        x - margin
-    )
-
-    y1 = max(
-        0,
-        y - margin
-    )
-
-    x2 = min(
-        frame.shape[1],
-        x + w + margin
-    )
-
-    y2 = min(
-        frame.shape[0],
-        y + h + margin
-    )
-
-    face = frame[
-        y1:y2,
-        x1:x2
-    ]
-
-    face = cv2.resize(
-        face,
-        (config.IMG_SIZE, config.IMG_SIZE)
-    )
-
-    return face
+# Face detection + crop live in data_prep (shared with training crops).
 
 
 # =========================================================
@@ -486,6 +407,8 @@ if __name__ == "__main__":
         )
 
         sys.exit(1)
+
+    seed_everything(config.SEED)
 
     test_video(
         sys.argv[1]

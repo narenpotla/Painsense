@@ -3,7 +3,7 @@ PainSense - monitoring dashboard.
 
 Run alongside realtime_infer.py:
     python dashboard.py
-Then open http://localhost:5000
+Then open http://127.0.0.1:5000 (bound to localhost only)
 
 Polls the same SQLite DB that realtime_infer.py writes to, so the two
 processes just need to run at the same time - no extra wiring required.
@@ -125,4 +125,4 @@ def api_scores():
 
 if __name__ == "__main__":
     db.init_db()
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="127.0.0.1", port=5000, debug=False)

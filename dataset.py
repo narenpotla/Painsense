@@ -22,7 +22,7 @@ import random
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 import config
 
@@ -239,22 +239,16 @@ class FrameDataset(Dataset):
         self.samples = []
         self.groups = []
 
-        video_folders = sorted([
-            folder
-            for folder in glob.glob(os.path.join(frames_dir, "*"))
-            if os.path.isdir(folder)
-        ])
+        # Only folders whose name carries a Pain / NoPain label.
+        # video_001 ... video_040 are label-free copies and are skipped.
+        labeled = list_labeled_videos(frames_dir)
 
-        if not video_folders:
+        if not labeled:
             raise RuntimeError(
-                f"No video face folders found in {frames_dir}"
+                f"No labeled video face folders found in {frames_dir}"
             )
 
-        for video_folder in video_folders:
-
-            video_name = os.path.basename(video_folder)
-
-            label = get_video_label(video_name)
+        for video_name, label, video_folder in labeled:
 
             frame_files = sorted(
                 glob.glob(os.path.join(video_folder, "*.jpg")),
@@ -354,24 +348,16 @@ class SequenceDataset(Dataset):
         self.samples = []
         self.groups = []
 
-        video_folders = sorted([
-            folder
-            for folder in glob.glob(os.path.join(seq_dir, "*"))
-            if os.path.isdir(folder)
-        ])
+        labeled = list_labeled_videos(seq_dir)
 
-        if not video_folders:
+        if not labeled:
             raise RuntimeError(
-                f"No video face folders found in {seq_dir}"
+                f"No labeled video face folders found in {seq_dir}"
             )
 
         sequence_length = config.SEQ_LEN
 
-        for video_folder in video_folders:
-
-            video_name = os.path.basename(video_folder)
-
-            label = get_video_label(video_name)
+        for video_name, label, video_folder in labeled:
 
             frame_files = sorted(
                 glob.glob(os.path.join(video_folder, "*.jpg")),
@@ -460,28 +446,129 @@ class SequenceDataset(Dataset):
 
 
 # ---------------------------------------------------------
+# Window helpers (shared with cv_intensity.py)
+# ---------------------------------------------------------
+
+def valid_window_starts(frame_numbers, seq_len=None, stride=None):
+    """
+    Frame numbers at which a window can start.
+
+    A window is seq_len frames, `stride` video frames apart. Every
+    frame in it must exist (face detection can drop frames), so a
+    window never silently bridges a gap.
+
+    Returns a sorted list of start frame numbers.
+    """
+
+    if seq_len is None:
+        seq_len = config.SEQ_LEN
+
+    if stride is None:
+        stride = config.SEQ_STRIDE
+
+    present = set(frame_numbers)
+
+    return [
+        n for n in sorted(present)
+        if all((n + k * stride) in present for k in range(seq_len))
+    ]
+
+
+def window_numbers(start, seq_len=None, stride=None):
+    if seq_len is None:
+        seq_len = config.SEQ_LEN
+
+    if stride is None:
+        stride = config.SEQ_STRIDE
+
+    return [start + k * stride for k in range(seq_len)]
+
+
+# ---------------------------------------------------------
+# Sequence-level augmentation
+# ---------------------------------------------------------
+
+AUGMENT_OPS = ("flip", "brightness", "contrast", "rotation", "crop", "blur")
+
+
+def augment_clip(images, rng=random):
+    """
+    Apply ONE randomly chosen augmentation to a whole clip.
+
+    The same op with the same parameters is applied to every frame,
+    so the temporal signal is not corrupted by per-frame jitter.
+
+    images: list of PIL.Image (RGB).
+    """
+
+    op = rng.choice(AUGMENT_OPS)
+
+    if op == "flip":
+        return [ImageOps.mirror(im) for im in images]
+
+    if op == "brightness":
+        factor = rng.uniform(0.75, 1.25)
+        return [ImageEnhance.Brightness(im).enhance(factor) for im in images]
+
+    if op == "contrast":
+        factor = rng.uniform(0.75, 1.25)
+        return [ImageEnhance.Contrast(im).enhance(factor) for im in images]
+
+    if op == "rotation":
+        angle = rng.uniform(-10.0, 10.0)
+        return [
+            im.rotate(angle, resample=Image.BILINEAR) for im in images
+        ]
+
+    if op == "crop":
+        w, h = images[0].size
+        scale = rng.uniform(0.85, 1.0)
+        cw, ch = int(w * scale), int(h * scale)
+        x0 = rng.randint(0, w - cw)
+        y0 = rng.randint(0, h - ch)
+        return [
+            im.crop((x0, y0, x0 + cw, y0 + ch)).resize((w, h), Image.BILINEAR)
+            for im in images
+        ]
+
+    radius = rng.uniform(0.5, 1.5)
+    return [im.filter(ImageFilter.GaussianBlur(radius)) for im in images]
+
+
+# ---------------------------------------------------------
 # Intensity sequence dataset
 # ---------------------------------------------------------
 
 class IntensitySequenceDataset(Dataset):
     """
-    Consecutive face frames with a generated 0-10 intensity target.
+    Windows of SEQ_LEN face frames SEQ_STRIDE video frames apart, with
+    a generated 0-10 target ("expression intensity on a synthetic morph
+    scale").
 
-    Pain video: target rises from 0 at the first frame to 10 at the last.
+    Pain video: target rises linearly with frame index, 0 at the first
+    frame and 10 at the last (a neutral-to-pain morph).
     NoPain video: target is 0 on every frame.
+
+    train=True enables sequence-level augmentation (one op per clip).
     """
 
     def __init__(
         self,
         frames_dir=None,
         sequences_per_video=6,
-        train=True
+        train=True,
+        stride=None
     ):
         if frames_dir is None:
             frames_dir = config.VIDEO_FACE_DIR
 
+        if stride is None:
+            stride = config.SEQ_STRIDE
+
         self.samples = []
         self.groups = []
+        self.stride = stride
+        self.augment = bool(train)
         sequence_length = config.SEQ_LEN
 
         for video_name, label, folder in list_labeled_videos(frames_dir):
@@ -490,28 +577,17 @@ class IntensitySequenceDataset(Dataset):
                 key=get_frame_number
             )
 
-            if len(frame_files) < sequence_length:
+            if not frame_files:
                 continue
 
-            numbers = [get_frame_number(path) for path in frame_files]
+            by_number = {get_frame_number(p): p for p in frame_files}
+            numbers = sorted(by_number)
             frame_min = numbers[0]
             frame_max = numbers[-1]
 
-            valid_starts = []
-
-            for start in range(0, len(frame_files) - sequence_length + 1):
-                candidate = frame_files[start:start + sequence_length]
-                window_numbers = [
-                    get_frame_number(path)
-                    for path in candidate
-                ]
-                expected = list(range(
-                    window_numbers[0],
-                    window_numbers[0] + sequence_length
-                ))
-
-                if window_numbers == expected:
-                    valid_starts.append(start)
+            valid_starts = valid_window_starts(
+                numbers, sequence_length, stride
+            )
 
             if not valid_starts:
                 continue
@@ -529,15 +605,11 @@ class IntensitySequenceDataset(Dataset):
                     chosen.append(valid_starts[position])
 
             for start in sorted(set(chosen)):
-                candidate = frame_files[start:start + sequence_length]
+                nums = window_numbers(start, sequence_length, stride)
+                candidate = [by_number[n] for n in nums]
                 intensities = [
-                    frame_intensity(
-                        label,
-                        get_frame_number(path),
-                        frame_min,
-                        frame_max
-                    )
-                    for path in candidate
+                    frame_intensity(label, n, frame_min, frame_max)
+                    for n in nums
                 ]
                 self.samples.append((candidate, intensities))
                 self.groups.append(video_name)
@@ -551,7 +623,8 @@ class IntensitySequenceDataset(Dataset):
 
         print(
             f"IntensitySequenceDataset: {len(self.samples)} sequences "
-            f"from {len(set(self.groups))} videos"
+            f"from {len(set(self.groups))} videos "
+            f"(stride {stride} frames = {stride / config.VIDEO_FPS:.2f} s)"
         )
 
     def __len__(self):
@@ -559,20 +632,149 @@ class IntensitySequenceDataset(Dataset):
 
     def __getitem__(self, idx):
         frame_paths, intensities = self.samples[idx]
-        tensors = []
+        images = [Image.open(p).convert("RGB") for p in frame_paths]
 
-        for frame_path in frame_paths:
-            img = Image.open(frame_path).convert("RGB")
-            tensors.append(self.transform(img))
+        if self.augment:
+            images = augment_clip(images)
 
-        seq_tensor = torch.stack(tensors)
+        seq_tensor = torch.stack([self.transform(im) for im in images])
         target_tensor = torch.tensor(intensities, dtype=torch.float32)
         return seq_tensor, target_tensor
 
 
 # ---------------------------------------------------------
-# Video-level train/validation split
+# Video-level splits
 # ---------------------------------------------------------
+
+def _eval_copy(dataset):
+    """Shallow copy with augmentation off and the plain transform."""
+
+    import copy
+
+    clone = copy.copy(dataset)
+    clone.transform = frame_transform
+
+    if hasattr(clone, "augment"):
+        clone.augment = False
+
+    return clone
+
+
+def stratified_group_split(groups, val_frac, test_frac=0.0, seed=42):
+    """
+    Split video names into (train, val, test) lists, stratified by the
+    Pain / NoPain label. Each class contributes
+    round(n * frac) videos (at least 1 when frac > 0) to val and test.
+    """
+
+    by_label = {0: [], 1: []}
+
+    for group in sorted(set(groups)):
+        by_label[get_video_label(group)].append(group)
+
+    rng = random.Random(seed)
+    train, val, test = [], [], []
+
+    for label in (0, 1):
+        items = by_label[label]
+        rng.shuffle(items)
+
+        n = len(items)
+        n_test = max(1, round(n * test_frac)) if test_frac > 0 else 0
+        n_val = max(1, round(n * val_frac)) if val_frac > 0 else 0
+
+        if n_test + n_val >= n:
+            raise RuntimeError(
+                f"Not enough videos ({n}) of label {label} for the split."
+            )
+
+        test += items[:n_test]
+        val += items[n_test:n_test + n_val]
+        train += items[n_test + n_val:]
+
+    return sorted(train), sorted(val), sorted(test)
+
+
+def split_dataset_3way(
+    dataset,
+    val_frac=config.VAL_SPLIT,
+    test_frac=config.TEST_SPLIT,
+    seed=42
+):
+    """
+    Video-level train / val / test split (stratified by label).
+
+    Use val to choose the checkpoint and fit the calibration, then
+    score test once. Augmentation is on for train only.
+
+    Returns (train_subset, val_subset, test_subset, names) where
+    names = {"train": [...], "val": [...], "test": [...]}.
+    """
+
+    if not hasattr(dataset, "groups"):
+        raise RuntimeError(
+            "Dataset does not contain video group information."
+        )
+
+    train_v, val_v, test_v = stratified_group_split(
+        dataset.groups, val_frac, test_frac, seed
+    )
+
+    def indices(names):
+        wanted = set(names)
+        return [i for i, g in enumerate(dataset.groups) if g in wanted]
+
+    eval_ds = _eval_copy(dataset)
+
+    train_subset = torch.utils.data.Subset(dataset, indices(train_v))
+    val_subset = torch.utils.data.Subset(eval_ds, indices(val_v))
+    test_subset = torch.utils.data.Subset(eval_ds, indices(test_v))
+
+    print(
+        f"Video split: {len(train_v)} train / {len(val_v)} val / "
+        f"{len(test_v)} test videos"
+    )
+    print(
+        f"Samples: {len(train_subset)} train / {len(val_subset)} val / "
+        f"{len(test_subset)} test"
+    )
+
+    return (
+        train_subset,
+        val_subset,
+        test_subset,
+        {"train": train_v, "val": val_v, "test": test_v}
+    )
+
+
+def stratified_kfold_videos(videos, n_folds=5, seed=0):
+    """
+    Stratified k-fold over VIDEOS (never over windows).
+
+    Returns a list of (train_videos, test_videos) of length n_folds.
+    Each class is shuffled with `seed` and dealt round-robin so every
+    fold gets an equal number of Pain and NoPain videos.
+    """
+
+    rng = random.Random(seed)
+    folds = [[] for _ in range(n_folds)]
+
+    for label in (0, 1):
+        items = sorted(v for v in set(videos) if get_video_label(v) == label)
+        rng.shuffle(items)
+
+        for i, video in enumerate(items):
+            folds[i % n_folds].append(video)
+
+    splits = []
+
+    for k in range(n_folds):
+        test = sorted(folds[k])
+        train = sorted(v for j, f in enumerate(folds) if j != k for v in f)
+        splits.append((train, test))
+
+    return splits
+
 
 def split_dataset(
     dataset,
@@ -580,15 +782,12 @@ def split_dataset(
     seed=42
 ):
     """
-    Split the dataset by VIDEO.
+    Split the dataset by VIDEO into train / validation.
 
-    Training data keeps the training augmentation.
-
-    Validation data uses the normal validation transform
-    without RandomHorizontalFlip or ColorJitter.
+    Kept for the binary stages and for reproducing the original
+    6-video validation set. Training data keeps its augmentation;
+    validation data uses the plain transform and no augmentation.
     """
-
-    import copy
 
     if not hasattr(dataset, "groups"):
         raise RuntimeError(
@@ -597,22 +796,8 @@ def split_dataset(
 
     groups = sorted(set(dataset.groups))
 
-    group_labels = {}
-
-    for group in groups:
-        group_labels[group] = get_video_label(group)
-
-    pain_groups = [
-        g for g in groups
-        if group_labels[g] == 1
-    ]
-
-    nopain_groups = [
-        g for g in groups
-        if group_labels[g] == 0
-    ]
-
-    import random
+    pain_groups = [g for g in groups if get_video_label(g) == 1]
+    nopain_groups = [g for g in groups if get_video_label(g) == 0]
 
     rng = random.Random(seed)
 
@@ -624,136 +809,10 @@ def split_dataset(
         if len(group_list) <= 1:
             return group_list, []
 
-        n_val = max(
-            1,
-            int(len(group_list) * val_split)
-        )
+        n_val = max(1, int(len(group_list) * val_split))
+        n_val = min(n_val, len(group_list) - 1)
 
-        n_val = min(
-            n_val,
-            len(group_list) - 1
-        )
-
-        return (
-            group_list[n_val:],
-            group_list[:n_val]
-        )
-
-    train_pain, val_pain = split_groups(
-        pain_groups
-    )
-
-    train_nopain, val_nopain = split_groups(
-        nopain_groups
-    )
-
-    train_groups = set(
-        train_pain + train_nopain
-    )
-
-    val_groups = set(
-        val_pain + val_nopain
-    )
-
-    train_indices = [
-        i
-        for i, group in enumerate(dataset.groups)
-        if group in train_groups
-    ]
-
-    val_indices = [
-        i
-        for i, group in enumerate(dataset.groups)
-        if group in val_groups
-    ]
-
-    # Keep the original dataset for training.
-    train_dataset = dataset
-
-    # Make a separate copy for validation so that
-    # validation does NOT use training augmentation.
-    val_dataset = copy.copy(dataset)
-
-    val_dataset.transform = frame_transform
-
-    train_subset = torch.utils.data.Subset(
-        train_dataset,
-        train_indices
-    )
-
-    val_subset = torch.utils.data.Subset(
-        val_dataset,
-        val_indices
-    )
-
-    print(
-        f"Video split: "
-        f"{len(train_groups)} train videos, "
-        f"{len(val_groups)} validation videos"
-    )
-
-    print(
-        f"Samples: "
-        f"{len(train_subset)} train, "
-        f"{len(val_subset)} validation"
-    )
-
-    return train_subset, val_subset
-
-    """
-    Split by VIDEO, not by individual frame/sequence.
-
-    This prevents frames from the same SynPAIN video appearing
-    in both training and validation.
-    """
-
-    if not hasattr(dataset, "groups"):
-        raise RuntimeError(
-            "Dataset does not contain video group information."
-        )
-
-    groups = sorted(set(dataset.groups))
-
-    # Determine label for each video.
-    group_labels = {}
-
-    for group in groups:
-        group_labels[group] = get_video_label(group)
-
-    pain_groups = [
-        g for g in groups
-        if group_labels[g] == 1
-    ]
-
-    nopain_groups = [
-        g for g in groups
-        if group_labels[g] == 0
-    ]
-
-    rng = random.Random(seed)
-
-    rng.shuffle(pain_groups)
-    rng.shuffle(nopain_groups)
-
-    def split_groups(group_list):
-
-        if len(group_list) <= 1:
-            return group_list, []
-
-        n_val = max(
-            1,
-            int(len(group_list) * val_split)
-        )
-
-        n_val = min(
-            n_val,
-            len(group_list) - 1
-        )
-
-        return (
-            group_list[n_val:],
-            group_list[:n_val]
-        )
+        return group_list[n_val:], group_list[:n_val]
 
     train_pain, val_pain = split_groups(pain_groups)
     train_nopain, val_nopain = split_groups(nopain_groups)
@@ -762,26 +821,17 @@ def split_dataset(
     val_groups = set(val_pain + val_nopain)
 
     train_indices = [
-        i
-        for i, group in enumerate(dataset.groups)
+        i for i, group in enumerate(dataset.groups)
         if group in train_groups
     ]
 
     val_indices = [
-        i
-        for i, group in enumerate(dataset.groups)
+        i for i, group in enumerate(dataset.groups)
         if group in val_groups
     ]
 
-    train_subset = torch.utils.data.Subset(
-        dataset,
-        train_indices
-    )
-
-    val_subset = torch.utils.data.Subset(
-        dataset,
-        val_indices
-    )
+    train_subset = torch.utils.data.Subset(dataset, train_indices)
+    val_subset = torch.utils.data.Subset(_eval_copy(dataset), val_indices)
 
     print(
         f"Video split: "

@@ -1,0 +1,896 @@
+{
+  "target": "expression intensity on a synthetic morph scale (0-10)",
+  "metrics_on": "last frame of each window",
+  "n_videos": 40,
+  "n_windows": 3085,
+  "seq_len": 8,
+  "stride_frames": 6,
+  "epochs": 30,
+  "folds": 5,
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "features": "frozen ImageNet ResNet18, flip copies used as augmentation",
+  "summary": {
+    "frame": {
+      "mae": {
+        "mean": 1.9315425634384156,
+        "std": 0.2575367870061427
+      },
+      "rmse": {
+        "mean": 2.6173006852467853,
+        "std": 0.2762920689101618
+      },
+      "pearson": {
+        "mean": 0.7256725033124288,
+        "std": 0.07133193178637537
+      },
+      "spearman": {
+        "mean": 0.7107839742243153,
+        "std": 0.09157231376313037
+      },
+      "alert_macro_f1": {
+        "mean": 0.6406331655307428,
+        "std": 0.07831027447917166
+      }
+    },
+    "pool": {
+      "mae": {
+        "mean": 1.9467650334040323,
+        "std": 0.47219751286586
+      },
+      "rmse": {
+        "mean": 2.605815076828003,
+        "std": 0.5299216698846191
+      },
+      "pearson": {
+        "mean": 0.7495226045449574,
+        "std": 0.1464533503584166
+      },
+      "spearman": {
+        "mean": 0.7229342118641179,
+        "std": 0.18629307614485374
+      },
+      "alert_macro_f1": {
+        "mean": 0.6617047861987376,
+        "std": 0.15226268434763043
+      }
+    },
+    "lstm": {
+      "mae": {
+        "mean": 1.7823547760645548,
+        "std": 0.5896007881562872
+      },
+      "rmse": {
+        "mean": 2.535794425010681,
+        "std": 0.608034014007168
+      },
+      "pearson": {
+        "mean": 0.7495063642660776,
+        "std": 0.16382670702951696
+      },
+      "spearman": {
+        "mean": 0.7343155034307914,
+        "std": 0.171542276526681
+      },
+      "alert_macro_f1": {
+        "mean": 0.7579316652251863,
+        "std": 0.1101332359504063
+      }
+    },
+    "zero": {
+      "mae": {
+        "mean": 3.4098567326863605,
+        "std": 0.18126441561656526
+      },
+      "rmse": {
+        "mean": 4.970870176951091,
+        "std": 0.13897315346332248
+      },
+      "pearson": {
+        "mean": null,
+        "std": null
+      },
+      "spearman": {
+        "mean": null,
+        "std": null
+      },
+      "alert_macro_f1": {
+        "mean": 0.40907435215474774,
+        "std": 0.006685965908863685
+      }
+    },
+    "train_mean": {
+      "mae": {
+        "mean": 3.3526785214742025,
+        "std": 0.029252401429536695
+      },
+      "rmse": {
+        "mean": 3.6218360900878905,
+        "std": 0.029053600332929204
+      },
+      "pearson": {
+        "mean": null,
+        "std": null
+      },
+      "spearman": {
+        "mean": null,
+        "std": null
+      },
+      "alert_macro_f1": {
+        "mean": 0.40907435215474774,
+        "std": 0.006685965908863685
+      }
+    }
+  },
+  "paired_mae_diff": {
+    "lstm_minus_frame": {
+      "mean_diff": -0.14918778737386068,
+      "std_diff": 0.37599688834431577,
+      "a_better_in": 10,
+      "runs": 15
+    },
+    "lstm_minus_pool": {
+      "mean_diff": -0.16441025733947753,
+      "std_diff": 0.2854889915330078,
+      "a_better_in": 12,
+      "runs": 15
+    },
+    "pool_minus_frame": {
+      "mean_diff": 0.015222469965616861,
+      "std_diff": 0.2466360089736833,
+      "a_better_in": 6,
+      "runs": 15
+    }
+  },
+  "calibration_oof": {
+    "fitted_scale": 0.8686717051418256,
+    "fitted_bias": 0.6685819625854492,
+    "oof_mae_raw": 1.7901805639266968,
+    "oof_mae_with_fit": 1.972213864326477,
+    "applied": false,
+    "scale": 1.0,
+    "bias": 0.0,
+    "note": "least-squares fit on pooled out-of-fold LSTM predictions; applied only if it lowers out-of-fold MAE, else identity"
+  },
+  "runs": [
+    {
+      "seed": 42,
+      "fold": 0,
+      "test_videos": [
+        "1010321270_NoPain_woman_Young",
+        "1011154730_NoPain_woman_Old",
+        "1011213500_NoPain_woman_Old",
+        "1011454120_NoPain_woman_Old",
+        "1100259220_Pain_man_Young",
+        "1101248270_Pain_man_Old",
+        "1110458260_Pain_woman_Young",
+        "1111111480_Pain_woman_Old"
+      ],
+      "frame": {
+        "mae": 1.5089186429977417,
+        "rmse": 1.9774665832519531,
+        "pearson": 0.8521735072135925,
+        "spearman": 0.8251831227993096,
+        "alert_macro_f1": 0.7969962114378495
+      },
+      "pool": {
+        "mae": 1.2468682527542114,
+        "rmse": 1.718923568725586,
+        "pearson": 0.9290642738342285,
+        "spearman": 0.8983591353932133,
+        "alert_macro_f1": 0.8138730939301887
+      },
+      "lstm": {
+        "mae": 0.8588838577270508,
+        "rmse": 1.3473893404006958,
+        "pearson": 0.961313784122467,
+        "spearman": 0.9131932362869472,
+        "alert_macro_f1": 0.83842555604237
+      },
+      "zero": {
+        "mae": 3.378061532974243,
+        "rmse": 4.955612659454346,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.40955004591368227
+      },
+      "train_mean": {
+        "mae": 3.362218141555786,
+        "rmse": 3.626018762588501,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.40955004591368227
+      }
+    },
+    {
+      "seed": 42,
+      "fold": 1,
+      "test_videos": [
+        "1001015290_NoPain_man_Old",
+        "1001242590_NoPain_man_Old",
+        "1010015390_NoPain_woman_Young",
+        "1011010300_NoPain_woman_Old",
+        "1100031270_Pain_man_Young",
+        "1100122200_Pain_man_Young",
+        "1101347180_Pain_man_Old",
+        "1110344300_Pain_woman_Young"
+      ],
+      "frame": {
+        "mae": 2.1214983463287354,
+        "rmse": 2.712254524230957,
+        "pearson": 0.6969353556632996,
+        "spearman": 0.7216312981530704,
+        "alert_macro_f1": 0.6171812244612859
+      },
+      "pool": {
+        "mae": 2.195787191390991,
+        "rmse": 2.5423583984375,
+        "pearson": 0.7495733499526978,
+        "spearman": 0.7626335621962756,
+        "alert_macro_f1": 0.7203107079553748
+      },
+      "lstm": {
+        "mae": 1.796628713607788,
+        "rmse": 2.731520652770996,
+        "pearson": 0.702951967716217,
+        "spearman": 0.7269004027076975,
+        "alert_macro_f1": 0.8347780404517993
+      },
+      "zero": {
+        "mae": 3.8835532665252686,
+        "rmse": 5.315806865692139,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.3927789934354486
+      },
+      "train_mean": {
+        "mae": 3.3780219554901123,
+        "rmse": 3.6763296127319336,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.3927789934354486
+      }
+    },
+    {
+      "seed": 42,
+      "fold": 2,
+      "test_videos": [
+        "1000124840_NoPain_man_Young",
+        "1001334160_NoPain_man_Old",
+        "1010417250_NoPain_woman_Young",
+        "1011330460_NoPain_woman_Old",
+        "1100331190_Pain_man_Young",
+        "1100454100_Pain_man_Young",
+        "1110258020_Pain_woman_Young",
+        "1111421320_Pain_woman_Old"
+      ],
+      "frame": {
+        "mae": 2.439504861831665,
+        "rmse": 3.1176741123199463,
+        "pearson": 0.6087766885757446,
+        "spearman": 0.5528248244786608,
+        "alert_macro_f1": 0.5797646718682832
+      },
+      "pool": {
+        "mae": 2.9317867755889893,
+        "rmse": 3.580664873123169,
+        "pearson": 0.39588335156440735,
+        "spearman": 0.2014752798519946,
+        "alert_macro_f1": 0.4154709803704319
+      },
+      "lstm": {
+        "mae": 3.2611401081085205,
+        "rmse": 3.5572550296783447,
+        "pearson": 0.3185131549835205,
+        "spearman": 0.3587891861423384,
+        "alert_macro_f1": 0.5751171207583914
+      },
+      "zero": {
+        "mae": 3.3623743057250977,
+        "rmse": 4.944092273712158,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.4100456621004566
+      },
+      "train_mean": {
+        "mae": 3.362466335296631,
+        "rmse": 3.6251189708709717,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.4100456621004566
+      }
+    },
+    {
+      "seed": 42,
+      "fold": 3,
+      "test_videos": [
+        "1000026870_NoPain_man_Young",
+        "1000445970_NoPain_man_Young",
+        "1001120000_NoPain_man_Old",
+        "1010124650_NoPain_woman_Young",
+        "1101059780_Pain_man_Old",
+        "1101143430_Pain_man_Old",
+        "1101417350_Pain_man_Old",
+        "1110157820_Pain_woman_Young"
+      ],
+      "frame": {
+        "mae": 1.8667970895767212,
+        "rmse": 2.5331785678863525,
+        "pearson": 0.7081682682037354,
+        "spearman": 0.7055806153457168,
+        "alert_macro_f1": 0.5950001178106077
+      },
+      "pool": {
+        "mae": 1.433617353439331,
+        "rmse": 1.9350357055664062,
+        "pearson": 0.8428210020065308,
+        "spearman": 0.800553812336432,
+        "alert_macro_f1": 0.7834772346108454
+      },
+      "lstm": {
+        "mae": 1.9701250791549683,
+        "rmse": 2.6788315773010254,
+        "pearson": 0.8227311372756958,
+        "spearman": 0.8232823311581752,
+        "alert_macro_f1": 0.8916336098088713
+      },
+      "zero": {
+        "mae": 3.080723762512207,
+        "rmse": 4.697457790374756,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.4221153846153846
+      },
+      "train_mean": {
+        "mae": 3.3073348999023438,
+        "rmse": 3.5690479278564453,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.4221153846153846
+      }
+    },
+    {
+      "seed": 42,
+      "fold": 4,
+      "test_videos": [
+        "1000235030_NoPain_man_Young",
+        "1000352210_NoPain_man_Young",
+        "1001423400_NoPain_man_Old",
+        "1010227560_NoPain_woman_Young",
+        "1110016350_Pain_woman_Young",
+        "1111015520_Pain_woman_Old",
+        "1111243490_Pain_woman_Old",
+        "1111317410_Pain_woman_Old"
+      ],
+      "frame": {
+        "mae": 1.9275106191635132,
+        "rmse": 2.8020191192626953,
+        "pearson": 0.7621333599090576,
+        "spearman": 0.7841950414319682,
+        "alert_macro_f1": 0.5525138194261647
+      },
+      "pool": {
+        "mae": 2.124051332473755,
+        "rmse": 2.89388370513916,
+        "pearson": 0.881115734577179,
+        "spearman": 0.8656100689485604,
+        "alert_macro_f1": 0.4258061816947829
+      },
+      "lstm": {
+        "mae": 1.9961459636688232,
+        "rmse": 2.8319759368896484,
+        "pearson": 0.8866485953330994,
+        "spearman": 0.8465746760793569,
+        "alert_macro_f1": 0.481619937694704
+      },
+      "zero": {
+        "mae": 3.3677687644958496,
+        "rmse": 4.9502339363098145,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.4095940959409594
+      },
+      "train_mean": {
+        "mae": 3.3677685260772705,
+        "rmse": 3.6283929347991943,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.4095940959409594
+      }
+    },
+    {
+      "seed": 43,
+      "fold": 0,
+      "test_videos": [
+        "1000352210_NoPain_man_Young",
+        "1001242590_NoPain_man_Old",
+        "1001334160_NoPain_man_Old",
+        "1010124650_NoPain_woman_Young",
+        "1101347180_Pain_man_Old",
+        "1101417350_Pain_man_Old",
+        "1111111480_Pain_woman_Old",
+        "1111317410_Pain_woman_Old"
+      ],
+      "frame": {
+        "mae": 1.6716911792755127,
+        "rmse": 2.3458364009857178,
+        "pearson": 0.8093203902244568,
+        "spearman": 0.8004308881663481,
+        "alert_macro_f1": 0.6065973757924222
+      },
+      "pool": {
+        "mae": 1.4223095178604126,
+        "rmse": 2.094388484954834,
+        "pearson": 0.8331275582313538,
+        "spearman": 0.8260150685081942,
+        "alert_macro_f1": 0.8002599213896284
+      },
+      "lstm": {
+        "mae": 1.3940141201019287,
+        "rmse": 2.152458906173706,
+        "pearson": 0.8078770637512207,
+        "spearman": 0.8115387592894945,
+        "alert_macro_f1": 0.8401893746514391
+      },
+      "zero": {
+        "mae": 3.378061532974243,
+        "rmse": 4.955612659454346,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.40955004591368227
+      },
+      "train_mean": {
+        "mae": 3.362218141555786,
+        "rmse": 3.626018762588501,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.40955004591368227
+      }
+    },
+    {
+      "seed": 43,
+      "fold": 1,
+      "test_videos": [
+        "1010321270_NoPain_woman_Young",
+        "1010417250_NoPain_woman_Young",
+        "1011213500_NoPain_woman_Old",
+        "1011454120_NoPain_woman_Old",
+        "1100031270_Pain_man_Young",
+        "1100331190_Pain_man_Young",
+        "1100454100_Pain_man_Young",
+        "1110344300_Pain_woman_Young"
+      ],
+      "frame": {
+        "mae": 2.3739306926727295,
+        "rmse": 3.055833339691162,
+        "pearson": 0.5918844938278198,
+        "spearman": 0.545303759982947,
+        "alert_macro_f1": 0.584783847078929
+      },
+      "pool": {
+        "mae": 2.5275776386260986,
+        "rmse": 3.3956663608551025,
+        "pearson": 0.6341099739074707,
+        "spearman": 0.5183162971969012,
+        "alert_macro_f1": 0.4569256948383437
+      },
+      "lstm": {
+        "mae": 2.2737810611724854,
+        "rmse": 3.3249309062957764,
+        "pearson": 0.6035856008529663,
+        "spearman": 0.41494902605070066,
+        "alert_macro_f1": 0.7198879551820728
+      },
+      "zero": {
+        "mae": 3.3677687644958496,
+        "rmse": 4.9502339363098145,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.4095940959409594
+      },
+      "train_mean": {
+        "mae": 3.3677687644958496,
+        "rmse": 3.6283929347991943,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.4095940959409594
+      }
+    },
+    {
+      "seed": 43,
+      "fold": 2,
+      "test_videos": [
+        "1000026870_NoPain_man_Young",
+        "1000445970_NoPain_man_Young",
+        "1001015290_NoPain_man_Old",
+        "1010227560_NoPain_woman_Young",
+        "1100122200_Pain_man_Young",
+        "1110458260_Pain_woman_Young",
+        "1111015520_Pain_woman_Old",
+        "1111243490_Pain_woman_Old"
+      ],
+      "frame": {
+        "mae": 1.8601865768432617,
+        "rmse": 2.5008909702301025,
+        "pearson": 0.7331019043922424,
+        "spearman": 0.7340384213707312,
+        "alert_macro_f1": 0.6857574997211999
+      },
+      "pool": {
+        "mae": 1.938995361328125,
+        "rmse": 2.7701237201690674,
+        "pearson": 0.708892822265625,
+        "spearman": 0.7389618849229187,
+        "alert_macro_f1": 0.6512074548380777
+      },
+      "lstm": {
+        "mae": 1.768962025642395,
+        "rmse": 2.37455415725708,
+        "pearson": 0.7611216902732849,
+        "spearman": 0.7633203063296132,
+        "alert_macro_f1": 0.7203754819723545
+      },
+      "zero": {
+        "mae": 3.394286632537842,
+        "rmse": 4.969684600830078,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.40875232774674114
+      },
+      "train_mean": {
+        "mae": 3.3674473762512207,
+        "rmse": 3.6299850940704346,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.40875232774674114
+      }
+    },
+    {
+      "seed": 43,
+      "fold": 3,
+      "test_videos": [
+        "1000235030_NoPain_man_Young",
+        "1001423400_NoPain_man_Old",
+        "1011010300_NoPain_woman_Old",
+        "1011154730_NoPain_woman_Old",
+        "1100259220_Pain_man_Young",
+        "1101059780_Pain_man_Old",
+        "1110157820_Pain_woman_Young",
+        "1111421320_Pain_woman_Old"
+      ],
+      "frame": {
+        "mae": 1.544427752494812,
+        "rmse": 2.5456008911132812,
+        "pearson": 0.7545149922370911,
+        "spearman": 0.7459684242890915,
+        "alert_macro_f1": 0.6420963124342765
+      },
+      "pool": {
+        "mae": 1.2381550073623657,
+        "rmse": 2.039734125137329,
+        "pearson": 0.8773554563522339,
+        "spearman": 0.8607622125547989,
+        "alert_macro_f1": 0.6483312464919477
+      },
+      "lstm": {
+        "mae": 0.8009583950042725,
+        "rmse": 1.4869682788848877,
+        "pearson": 0.9140928387641907,
+        "spearman": 0.8788744172224429,
+        "alert_macro_f1": 0.8232480886722532
+      },
+      "zero": {
+        "mae": 3.440582752227783,
+        "rmse": 4.962011337280273,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.41170097508125675
+      },
+      "train_mean": {
+        "mae": 3.284209728240967,
+        "rmse": 3.575716018676758,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.41170097508125675
+      }
+    },
+    {
+      "seed": 43,
+      "fold": 4,
+      "test_videos": [
+        "1000124840_NoPain_man_Young",
+        "1001120000_NoPain_man_Old",
+        "1010015390_NoPain_woman_Young",
+        "1011330460_NoPain_woman_Old",
+        "1101143430_Pain_man_Old",
+        "1101248270_Pain_man_Old",
+        "1110016350_Pain_woman_Young",
+        "1110258020_Pain_woman_Young"
+      ],
+      "frame": {
+        "mae": 2.1483516693115234,
+        "rmse": 2.9456558227539062,
+        "pearson": 0.6123727560043335,
+        "spearman": 0.5193858760127611,
+        "alert_macro_f1": 0.7384187482533303
+      },
+      "pool": {
+        "mae": 2.567312717437744,
+        "rmse": 3.3518903255462646,
+        "pearson": 0.46143418550491333,
+        "spearman": 0.4323030826776886,
+        "alert_macro_f1": 0.7405042561099927
+      },
+      "lstm": {
+        "mae": 2.4082233905792236,
+        "rmse": 3.4186975955963135,
+        "pearson": 0.4695575535297394,
+        "spearman": 0.4404272166083165,
+        "alert_macro_f1": 0.7752623996707142
+      },
+      "zero": {
+        "mae": 3.4541218280792236,
+        "rmse": 5.013296604156494,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.4068441064638783
+      },
+      "train_mean": {
+        "mae": 3.367112398147583,
+        "rmse": 3.6339893341064453,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.4068441064638783
+      }
+    },
+    {
+      "seed": 44,
+      "fold": 0,
+      "test_videos": [
+        "1001015290_NoPain_man_Old",
+        "1001334160_NoPain_man_Old",
+        "1010227560_NoPain_woman_Young",
+        "1011454120_NoPain_woman_Old",
+        "1100031270_Pain_man_Young",
+        "1100331190_Pain_man_Young",
+        "1101417350_Pain_man_Old",
+        "1110258020_Pain_woman_Young"
+      ],
+      "frame": {
+        "mae": 1.7968777418136597,
+        "rmse": 2.587462902069092,
+        "pearson": 0.7464038729667664,
+        "spearman": 0.7062692007588,
+        "alert_macro_f1": 0.713480224159488
+      },
+      "pool": {
+        "mae": 1.8795604705810547,
+        "rmse": 2.6615631580352783,
+        "pearson": 0.7232023477554321,
+        "spearman": 0.7116020663108817,
+        "alert_macro_f1": 0.761062612883805
+      },
+      "lstm": {
+        "mae": 1.536603331565857,
+        "rmse": 2.4349679946899414,
+        "pearson": 0.7793719172477722,
+        "spearman": 0.7855079025967098,
+        "alert_macro_f1": 0.8144792518112196
+      },
+      "zero": {
+        "mae": 3.394286632537842,
+        "rmse": 4.969684600830078,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.40875232774674114
+      },
+      "train_mean": {
+        "mae": 3.3674473762512207,
+        "rmse": 3.6299850940704346,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.40875232774674114
+      }
+    },
+    {
+      "seed": 44,
+      "fold": 1,
+      "test_videos": [
+        "1000026870_NoPain_man_Young",
+        "1000352210_NoPain_man_Young",
+        "1001242590_NoPain_man_Old",
+        "1010417250_NoPain_woman_Young",
+        "1101248270_Pain_man_Old",
+        "1101347180_Pain_man_Old",
+        "1110344300_Pain_woman_Young",
+        "1111421320_Pain_woman_Old"
+      ],
+      "frame": {
+        "mae": 1.8887407779693604,
+        "rmse": 2.6151254177093506,
+        "pearson": 0.7608148455619812,
+        "spearman": 0.7567323540609444,
+        "alert_macro_f1": 0.4722166948562332
+      },
+      "pool": {
+        "mae": 1.933944821357727,
+        "rmse": 2.7670199871063232,
+        "pearson": 0.8074657917022705,
+        "spearman": 0.7934238039929818,
+        "alert_macro_f1": 0.40955004591368227
+      },
+      "lstm": {
+        "mae": 1.5238438844680786,
+        "rmse": 2.344593048095703,
+        "pearson": 0.8153111338615417,
+        "spearman": 0.7842694164758586,
+        "alert_macro_f1": 0.6306916947186245
+      },
+      "zero": {
+        "mae": 3.378061532974243,
+        "rmse": 4.955612659454346,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.40955004591368227
+      },
+      "train_mean": {
+        "mae": 3.362218141555786,
+        "rmse": 3.626018762588501,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.40955004591368227
+      }
+    },
+    {
+      "seed": 44,
+      "fold": 2,
+      "test_videos": [
+        "1000445970_NoPain_man_Young",
+        "1001423400_NoPain_man_Old",
+        "1011010300_NoPain_woman_Old",
+        "1011213500_NoPain_woman_Old",
+        "1100122200_Pain_man_Young",
+        "1100259220_Pain_man_Young",
+        "1100454100_Pain_man_Young",
+        "1111317410_Pain_woman_Old"
+      ],
+      "frame": {
+        "mae": 2.06657338142395,
+        "rmse": 2.4694302082061768,
+        "pearson": 0.7861648797988892,
+        "spearman": 0.7681891260403727,
+        "alert_macro_f1": 0.6779849544829202
+      },
+      "pool": {
+        "mae": 2.028352737426758,
+        "rmse": 2.3004941940307617,
+        "pearson": 0.8512692451477051,
+        "spearman": 0.8326287469879378,
+        "alert_macro_f1": 0.7116916744124286
+      },
+      "lstm": {
+        "mae": 1.6793246269226074,
+        "rmse": 2.2122292518615723,
+        "pearson": 0.8093894124031067,
+        "spearman": 0.805382017149344,
+        "alert_macro_f1": 0.7939438014482887
+      },
+      "zero": {
+        "mae": 3.7225770950317383,
+        "rmse": 5.204469203948975,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.3981288981288981
+      },
+      "train_mean": {
+        "mae": 3.3714916706085205,
+        "rmse": 3.6580231189727783,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.3981288981288981
+      }
+    },
+    {
+      "seed": 44,
+      "fold": 3,
+      "test_videos": [
+        "1010015390_NoPain_woman_Young",
+        "1010124650_NoPain_woman_Young",
+        "1011154730_NoPain_woman_Old",
+        "1011330460_NoPain_woman_Old",
+        "1101059780_Pain_man_Old",
+        "1110157820_Pain_woman_Young",
+        "1111111480_Pain_woman_Old",
+        "1111243490_Pain_woman_Old"
+      ],
+      "frame": {
+        "mae": 1.9463560581207275,
+        "rmse": 2.486996650695801,
+        "pearson": 0.7214028835296631,
+        "spearman": 0.738555743259408,
+        "alert_macro_f1": 0.6601117318435754
+      },
+      "pool": {
+        "mae": 1.9102184772491455,
+        "rmse": 2.443358898162842,
+        "pearson": 0.8014839887619019,
+        "spearman": 0.848075347570614,
+        "alert_macro_f1": 0.8700737852577549
+      },
+      "lstm": {
+        "mae": 2.0524709224700928,
+        "rmse": 2.8094048500061035,
+        "pearson": 0.7605768442153931,
+        "spearman": 0.7925494450318968,
+        "alert_macro_f1": 0.8319535221496006
+      },
+      "zero": {
+        "mae": 3.1935665607452393,
+        "rmse": 4.780570983886719,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.41906653426017876
+      },
+      "train_mean": {
+        "mae": 3.294442892074585,
+        "rmse": 3.5669991970062256,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.41906653426017876
+      }
+    },
+    {
+      "seed": 44,
+      "fold": 4,
+      "test_videos": [
+        "1000124840_NoPain_man_Young",
+        "1000235030_NoPain_man_Young",
+        "1001120000_NoPain_man_Old",
+        "1010321270_NoPain_woman_Young",
+        "1101143430_Pain_man_Old",
+        "1110016350_Pain_woman_Young",
+        "1110458260_Pain_woman_Young",
+        "1111015520_Pain_woman_Old"
+      ],
+      "frame": {
+        "mae": 1.8117730617523193,
+        "rmse": 2.564084768295288,
+        "pearson": 0.7409193515777588,
+        "spearman": 0.757470917214602,
+        "alert_macro_f1": 0.6865940493345766
+      },
+      "pool": {
+        "mae": 1.8229378461837769,
+        "rmse": 2.59212064743042,
+        "pearson": 0.7460399866104126,
+        "spearman": 0.753292808512375,
+        "alert_macro_f1": 0.7170269022837781
+      },
+      "lstm": {
+        "mae": 1.414216160774231,
+        "rmse": 2.331138849258423,
+        "pearson": 0.8295527696609497,
+        "spearman": 0.8691742123329811,
+        "alert_macro_f1": 0.7973691433450916
+      },
+      "zero": {
+        "mae": 3.3520560264587402,
+        "rmse": 4.9386725425720215,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.41009174311926605
+      },
+      "train_mean": {
+        "mae": 3.368011474609375,
+        "rmse": 3.627504825592041,
+        "pearson": NaN,
+        "spearman": NaN,
+        "alert_macro_f1": 0.41009174311926605
+      }
+    }
+  ],
+  "final_checkpoint": "C:\\Users\\naren\\Desktop\\Painsense_main-main\\Painsense_main-main\\checkpoints\\pain_intensity_features.pt"
+}
