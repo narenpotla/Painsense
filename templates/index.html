@@ -285,6 +285,91 @@
 
 
             <!-- =========================
+                 SCORE A PHOTO
+            ========================== -->
+
+            <section class="section" id="photoSection">
+
+                <div class="section-header">
+
+                    <div>
+
+                        <h2>
+                            Score a Photo
+                        </h2>
+
+                        <p>
+                            Upload one face photo (max {{ upload_max_mb }} MB).
+                            The largest face is cropped and scored by the
+                            single-photo model. The photo is not saved.
+                        </p>
+
+                    </div>
+
+                    <div class="model-badge">
+
+                        Single image
+
+                    </div>
+
+                </div>
+
+                <form class="photo-form" id="photoForm">
+
+                    <label class="photo-drop" id="photoDrop" for="photoInput">
+                        <input type="file"
+                               id="photoInput"
+                               name="photo"
+                               accept="image/*">
+                        <span id="photoFileName">Choose or drop a photo</span>
+                    </label>
+
+                    <button type="submit"
+                            class="photo-button"
+                            id="photoButton"
+                            disabled>
+                        Score photo
+                    </button>
+
+                </form>
+
+                <div class="photo-result" id="photoResult" hidden>
+
+                    <img class="photo-crop"
+                         id="photoCrop"
+                         alt="Face crop the model scored">
+
+                    <div class="photo-details">
+
+                        <div class="card-title">
+                            EXPRESSION INTENSITY
+                        </div>
+
+                        <div>
+                            <span class="score-value" id="photoScore">&mdash;</span>
+                            <span class="score-scale">/ 10 (synthetic scale)</span>
+                        </div>
+
+                        <div class="photo-bar">
+                            <div class="photo-bar-fill" id="photoBar"></div>
+                            <div class="photo-bar-line"
+                                 style="left: {{ alert_on * 10 }}%"
+                                 title="Live alert line"></div>
+                        </div>
+
+                        <p class="score-label" id="photoMessage"></p>
+                        <p class="photo-meta" id="photoMeta"></p>
+
+                    </div>
+
+                </div>
+
+                <p class="photo-error" id="photoError" hidden></p>
+
+            </section>
+
+
+            <!-- =========================
                  RECENT OBSERVATIONS
             ========================== -->
 

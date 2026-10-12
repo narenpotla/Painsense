@@ -24,6 +24,7 @@ PainSense/
 ├── live_camera.py          Run the live demo (webcam or video file)
 ├── dashboard.py            Web dashboard for the live demo
 ├── score_video.py          Run the live model on one video, print a timeline
+├── score_image.py          Score the face in one or more photos
 ├── cross_validate.py       Honest accuracy (video-wise CV) + builds the live model
 ├── robustness_study.py     Which training settings hold up on webcam-like input
 ├── evaluate.py             Score a checkpoint on held-out videos
@@ -38,6 +39,7 @@ PainSense/
 │   ├── models.py           Networks + checkpoint loading
 │   ├── features.py         Feature cache + cross-validation engine + metrics
 │   ├── live.py             Live scoring loop (used by live_camera / score_video)
+│   ├── photo.py            Score one still photo (used by score_image / dashboard)
 │   ├── alerts.py           AlertState: median of 5 + hysteresis
 │   ├── live_state.py       Latest result shared with the dashboard
 │   ├── db.py               SQLite score log
@@ -58,9 +60,10 @@ PainSense/
 | File | What it does |
 |---|---|
 | `live_camera.py` | The live demo. Opens the webcam (`--camera N`) or replays a file (`--video clip.mp4`). Crops the face every 0.25 s, scores it with the live model, applies the alert rule, logs to SQLite and writes the dashboard state. `--headless` runs without a window. |
-| `dashboard.py` | Flask dashboard at http://127.0.0.1:5000 (localhost only). Shows the current score, alert and capture status (OFFLINE when `live_camera.py` isn't running), plus a 30 s trend. |
+| `dashboard.py` | Flask dashboard at http://127.0.0.1:5000 (localhost only). Shows the current score, alert and capture status (OFFLINE when `live_camera.py` isn't running), a 30 s trend, and a **Score a photo** card for uploading a picture. |
 | `score_video.py` | Runs the exact live pipeline on one video file without a camera and prints every score next to the expected morph value. Use it to check the setup. |
-| `cross_validate.py` | Stratified 5-fold cross-validation **by video**, 3 seeds. Compares frame-only, mean-pool and LSTM heads against no-image baselines on clean, simulated-webcam and off-timing test frames. Writes `results/cross_validation.json`. `--final` trains the live model on all 40 videos → `checkpoints/pain_intensity_features.pt`. |
+| `score_image.py` | Scores the largest face in each photo given (`python score_image.py a.jpg b.png`); `--save-crops DIR` saves the 128×128 face crop the model saw. |
+| `cross_validate.py` | Stratified 5-fold cross-validation **by video**, 3 seeds. Compares frame-only, mean-pool and LSTM heads against no-image baselines on clean, simulated-webcam and off-timing test frames. Writes `results/cross_validation.json`. `--final` trains on all 40 videos and saves the live model (`checkpoints/pain_intensity_features.pt`) and the single-photo model (`checkpoints/pain_intensity_image.pt`). |
 | `robustness_study.py` | Ablation with fixed selection rules: plain vs webcam-style augmentation vs timing jitter vs both, then an ensemble. Writes `results/robustness_study.json` and prints the `FINAL_*` values for `painsense/config.py`. |
 | `evaluate.py` | Scores any checkpoint on held-out videos: MAE, RMSE, Pearson, Spearman, alert macro-F1, per-video MAE, always-0 baseline. |
 | `train_full_model.py` | Optional, slow: trains the full CNN-LSTM on face images with a 28/6/6 video split, clip augmentation and opt-in layer4 fine-tuning (`--finetune-layer4`). Not the live model; only a fallback. |
@@ -77,6 +80,7 @@ PainSense/
 | `models.py` | `PainIntensityLSTM` (full CNN-LSTM), `FeatureIntensityModel` (frame / pool / lstm heads on cached features), `FeatureEnsemble`, `imagenet_backbone`, `load_feature_checkpoint`. |
 | `features.py` | Feature cache (clean, flipped, webcam-style variants), `FeatureBank`, training of one setting, metrics, the CV loop and table printing. Shared by `cross_validate.py` and `robustness_study.py`. |
 | `live.py` | `load_scorer` (live model, offline, ensemble-aware; falls back to the old model with a warning), `LiveScorer` (ResNet once per frame, head on the cached window), OpenCV overlay and the `run()` loop. |
+| `photo.py` | `score_photo`: opens any image (phone EXIF rotation applied, huge images shrunk, non-images rejected), finds the largest face, crops it like the live demo and scores it with the single-photo model. Processes in memory; nothing is saved. |
 | `alerts.py` | `AlertState`: alert ON when the median of the last 5 scores reaches 6, OFF when it falls below 4, reset when the face is lost. |
 | `live_state.py` | Writes/reads `logs/dashboard_state.json` atomically, with a timestamp so the dashboard knows whether the camera is running. |
 | `db.py` | SQLite log (`logs/painsense.db`) in WAL mode; keeps the newest 100,000 rows. |
@@ -87,8 +91,9 @@ PainSense/
 | Path | What it is |
 |---|---|
 | `templates/index.html`, `static/css/dashboard.css`, `static/js/dashboard.js` | Dashboard page. Polls `/api/state` every second and `/api/history` every 2 s. Chart.js comes from a CDN (pinned 4.4.1); without internet only the chart is skipped. |
-| `tests/test_core.py` | 19 unit tests: alert rule, windows, splits, augmentations, model causality / BatchNorm / ensemble, live checkpoint, crop, SQLite, dashboard state. |
+| `tests/test_core.py` | 26 unit tests: alert rule, windows, splits, augmentations, model causality / BatchNorm / ensemble, live checkpoint, crop, SQLite, dashboard state (incl. locked-file retry), photo scoring and the upload endpoint. |
 | `checkpoints/pain_intensity_features.pt` | **Live model.** Feature head(s) + ResNet18 weights (runs offline). Made by `cross_validate.py --final`. |
+| `checkpoints/pain_intensity_image.pt` | **Single-photo model.** Frame-only head(s) (one face, no time context) + ResNet18 weights. Made by `cross_validate.py --final`. |
 | `checkpoints/pain_intensity.pt` (+ `_calibration.json`) | Older full CNN-LSTM, trained on frames 1/24 s apart. Fallback only. |
 | `checkpoints/cnn_encoder.pt`, `cnn_lstm.pt` | From the removed Pain/NoPain classifier; no code uses them any more. Safe to delete. |
 | `results/cross_validation.json`, `results/robustness_study.json` | Written by the scripts. Never edit by hand. |
@@ -135,7 +140,19 @@ What you should see:
 - Face: one crop every 0.25 s; the first score after 8 crops (about 2 s). ResNet runs once per new frame; only the small head sees the 8-frame window.
 - Alert: ON when the median of the last 5 scores reaches 6, OFF when it drops below 4.
 
-No camera? Check the whole pipeline on a clip:
+### Score a photo
+
+In the dashboard, use the **Score a photo** card: choose or drop a picture and press *Score photo*. It shows the face crop the model used, the 0–10 score, and whether it is above the live alert line (6). From the terminal:
+
+```powershell
+python score_image.py my_photo.jpg
+```
+
+A photo is a single frame, so it is scored by the **frame-only** model (one face, no time context), not the 8-frame LSTM used for video. Its cross-validated accuracy is the "frame-only" row in the results below. Use a clear, front-facing photo; the largest face is used. As with the camera, the number is expression intensity on a synthetic morph scale, not a pain measurement.
+
+### No camera?
+
+Check the whole pipeline on a clip:
 
 ```powershell
 python score_video.py data\videos\raw\SynPain\Videos\1100031270_Pain_man_Young.mp4

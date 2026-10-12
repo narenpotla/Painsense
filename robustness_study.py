@@ -94,7 +94,7 @@ def main():
             by_config[cname].append(spec_name(spec))
 
     print(f"\nSTAGE A: {len(specs_a)} settings")
-    runs_a, _, _ = run_cv(
+    runs_a, _ = run_cv(
         bank, specs_a, args.folds, args.seeds, args.epochs, args.seed,
         baselines=False, label="[A] "
     )
@@ -148,7 +148,7 @@ def main():
         single[spec_name(spec)] = spec_name(make_spec(variant, **win))
 
     print(f"\nSTAGE B: '{winner}' with an ensemble of {args.ensemble} heads")
-    runs_b, _, _ = run_cv(
+    runs_b, _ = run_cv(
         bank, specs_b, args.folds, args.seeds, args.epochs, args.seed,
         baselines=False, label="[B] "
     )

@@ -36,6 +36,10 @@ CHECKPOINT_DIR = os.path.join(ROOT, "checkpoints")
 # Live model: frozen ImageNet ResNet18 features -> temporal head(s).
 # Written by cross_validate.py --final. Used by the camera.
 FEATURE_CKPT = os.path.join(CHECKPOINT_DIR, "pain_intensity_features.pt")
+# Single-photo model: frame-only head(s), same training settings.
+# Written by cross_validate.py --final. Used by score_image.py and the
+# dashboard's "Score a photo" card.
+IMAGE_CKPT = os.path.join(CHECKPOINT_DIR, "pain_intensity_image.pt")
 # Older full CNN-LSTM (train_full_model.py). Camera fallback only.
 INTENSITY_CKPT = os.path.join(CHECKPOINT_DIR, "pain_intensity.pt")
 
@@ -121,6 +125,10 @@ ALERT_MEDIAN_WINDOW = 5
 # Smallest webcam face (pixels). Larger than the 40 px used for the
 # SynPAIN crops, to cut Haar false positives on background clutter.
 LIVE_MIN_FACE_SIZE = (60, 60)
+
+# Photo scoring: longest side used for face detection, upload size cap.
+PHOTO_MAX_SIDE = 1280
+UPLOAD_MAX_MB = 10
 
 DB_MAX_ROWS = 100_000          # newest rows kept in the SQLite log
 DASHBOARD_HISTORY = 120        # points in the trend chart (30 s)

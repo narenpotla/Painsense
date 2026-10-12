@@ -371,3 +371,107 @@ class StorageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _sample_frame():
+    """A full SynPAIN video frame (face present), or None if data is missing."""
+    import glob
+
+    frames = sorted(glob.glob(os.path.join(
+        config.VIDEO_FRAME_DIR, "1100031270_Pain_man_Young", "*.jpg"
+    )))
+    return frames[-1] if frames else None
+
+
+def _photo_ready():
+    import cv2
+
+    return (
+        hasattr(cv2, "CascadeClassifier")
+        and (os.path.exists(config.IMAGE_CKPT)
+             or os.path.exists(config.FEATURE_CKPT))
+        and _sample_frame() is not None
+    )
+
+
+class PhotoTest(unittest.TestCase):
+
+    def setUp(self):
+        if not _photo_ready():
+            self.skipTest("needs OpenCV 4, a model checkpoint and data/videos/frames")
+
+    def test_scores_a_face(self):
+        import base64
+        import io
+
+        from painsense.photo import score_photo
+
+        result = score_photo(_sample_frame())
+
+        self.assertTrue(result["face_found"])
+        self.assertGreaterEqual(result["score"], config.PAIN_SCORE_MIN)
+        self.assertLessEqual(result["score"], config.PAIN_SCORE_MAX)
+        crop = Image.open(io.BytesIO(base64.b64decode(result["crop_png"])))
+        self.assertEqual(crop.size, (config.CROP_SIZE, config.CROP_SIZE))
+
+    def test_no_face(self):
+        import io
+
+        from painsense.photo import score_photo
+
+        buf = io.BytesIO()
+        Image.new("RGB", (640, 480), (128, 128, 128)).save(buf, format="PNG")
+        result = score_photo(buf.getvalue())
+
+        self.assertFalse(result["face_found"])
+        self.assertIsNone(result["score"])
+
+    def test_rejects_non_image(self):
+        from painsense.photo import score_photo
+
+        with self.assertRaises(ValueError):
+            score_photo(b"this is not an image")
+
+    def test_exif_rotation_is_applied(self):
+        import io
+
+        from painsense.photo import load_image
+
+        upright = Image.open(_sample_frame()).convert("RGB")
+        # Store the pixels rotated, with EXIF orientation 6 ("rotate 90
+        # clockwise to display"), as phones do.
+        stored = upright.transpose(Image.ROTATE_90)
+        exif = stored.getexif()
+        exif[0x0112] = 6
+        buf = io.BytesIO()
+        stored.save(buf, format="JPEG", exif=exif)
+
+        loaded = load_image(buf.getvalue())
+        self.assertEqual(loaded.shape[:2], (upright.height, upright.width))
+
+    def test_dashboard_endpoint(self):
+        import io
+
+        import dashboard
+
+        client = dashboard.app.test_client()
+
+        with open(_sample_frame(), "rb") as handle:
+            ok = client.post(
+                "/api/score-image",
+                data={"photo": (io.BytesIO(handle.read()), "face.jpg")},
+                content_type="multipart/form-data"
+            )
+        self.assertEqual(ok.status_code, 200)
+        self.assertTrue(ok.get_json()["face_found"])
+
+        missing = client.post("/api/score-image", data={})
+        self.assertEqual(missing.status_code, 400)
+
+        garbage = client.post(
+            "/api/score-image",
+            data={"photo": (io.BytesIO(b"nope"), "x.jpg")},
+            content_type="multipart/form-data"
+        )
+        self.assertEqual(garbage.status_code, 400)
+        self.assertIn("error", garbage.get_json())

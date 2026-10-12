@@ -344,9 +344,136 @@ document.addEventListener("DOMContentLoaded", function () {
         chart = null;
     }
 
+    setupPhotoUpload();
+
     fetchState();
     fetchHistory();
 
     setInterval(fetchState, 1000);
     setInterval(fetchHistory, 2000);
 });
+
+
+// =========================================================
+// SCORE A PHOTO (POST /api/score-image)
+// =========================================================
+
+function setupPhotoUpload() {
+
+    const form = document.getElementById("photoForm");
+    const input = document.getElementById("photoInput");
+    const drop = document.getElementById("photoDrop");
+    const button = document.getElementById("photoButton");
+
+    if (!form || !input) {
+        return;
+    }
+
+    input.addEventListener("change", function () {
+        const file = input.files[0];
+        setText("photoFileName", file ? file.name : "Choose or drop a photo");
+        button.disabled = !file;
+    });
+
+    ["dragenter", "dragover"].forEach(function (name) {
+        drop.addEventListener(name, function (event) {
+            event.preventDefault();
+            drop.classList.add("dragging");
+        });
+    });
+
+    ["dragleave", "drop"].forEach(function (name) {
+        drop.addEventListener(name, function (event) {
+            event.preventDefault();
+            drop.classList.remove("dragging");
+        });
+    });
+
+    drop.addEventListener("drop", function (event) {
+        if (event.dataTransfer.files.length) {
+            input.files = event.dataTransfer.files;
+            input.dispatchEvent(new Event("change"));
+        }
+    });
+
+    form.addEventListener("submit", async function (event) {
+
+        event.preventDefault();
+
+        const file = input.files[0];
+
+        if (!file) {
+            return;
+        }
+
+        const body = new FormData();
+        body.append("photo", file);
+
+        button.disabled = true;
+        button.textContent = "Scoring…";
+        showPhotoError(null);
+
+        try {
+            const response = await fetch("/api/score-image", {
+                method: "POST",
+                body: body
+            });
+
+            const data = await response.json().catch(function () {
+                return { error: `Server error (${response.status})` };
+            });
+
+            if (!response.ok) {
+                throw new Error(data.error || `Server error (${response.status})`);
+            }
+
+            showPhotoResult(data);
+        }
+        catch (error) {
+            document.getElementById("photoResult").hidden = true;
+            showPhotoError(error.message);
+        }
+        finally {
+            button.disabled = !input.files[0];
+            button.textContent = "Score photo";
+        }
+    });
+}
+
+
+function showPhotoError(message) {
+
+    const element = document.getElementById("photoError");
+
+    element.hidden = !message;
+    element.textContent = message || "";
+}
+
+
+function showPhotoResult(data) {
+
+    if (!data.face_found) {
+        document.getElementById("photoResult").hidden = true;
+        showPhotoError(data.message || "No face found.");
+        return;
+    }
+
+    const score = Number(data.score);
+    const crop = document.getElementById("photoCrop");
+    const bar = document.getElementById("photoBar");
+
+    crop.src = "data:image/png;base64," + data.crop_png;
+    setText("photoScore", score.toFixed(1));
+    setText("photoMessage", data.message);
+
+    const [x, y, w, h] = data.box;
+    setText(
+        "photoMeta",
+        `Face ${w}×${h} px at (${x}, ${y}) · model ${data.model}`
+    );
+
+    bar.style.width = `${Math.max(0, Math.min(10, score)) * 10}%`;
+    bar.classList.toggle("high", Boolean(data.above_alert));
+
+    document.getElementById("photoResult").hidden = false;
+}

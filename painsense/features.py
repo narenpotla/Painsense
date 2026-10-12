@@ -442,16 +442,18 @@ def fit_linear(pred, target):
 # =========================================================
 
 def run_cv(bank, specs, n_folds, n_seeds, epochs, base_seed,
-           oof_key=None, baselines=True, label=""):
+           oof_keys=(), baselines=True, label=""):
     """
     specs: {name: spec}. Every spec sees the same folds and seeds, so
-    results can be compared pairwise. Returns (runs, oof_pred, oof_target)
-    where the out-of-fold predictions belong to specs[oof_key].
+    results can be compared pairwise.
+
+    Returns (runs, oof) where oof = {name: (pred, target)} holds the
+    pooled out-of-fold last-frame predictions of every name in oof_keys.
     """
 
     videos = bank.names
     runs = []
-    oof_pred, oof_target = [], []
+    oof_parts = {key: ([], []) for key in oof_keys}
     t0 = time.time()
 
     for s in range(n_seeds):
@@ -465,9 +467,9 @@ def run_cv(bank, specs, n_folds, n_seeds, epochs, base_seed,
                 models = train_spec(spec, bank, train_v, epochs, seed * 100 + k)
                 run[name], pred, y6 = evaluate_models(models, bank, test_v)
 
-                if name == oof_key:
-                    oof_pred.append(pred)
-                    oof_target.append(y6)
+                if name in oof_parts:
+                    oof_parts[name][0].append(pred)
+                    oof_parts[name][1].append(y6)
 
             if baselines:
                 idx6 = bank.window_index(test_v, (config.SEQ_STRIDE,))
@@ -492,11 +494,62 @@ def run_cv(bank, specs, n_folds, n_seeds, epochs, base_seed,
                 flush=True
             )
 
-    oof = (
-        (np.concatenate(oof_pred), np.concatenate(oof_target))
-        if oof_pred else (None, None)
+    oof = {
+        key: (np.concatenate(p), np.concatenate(t))
+        for key, (p, t) in oof_parts.items()
+        if p
+    }
+    return runs, oof
+
+
+def decide_calibration(pred, target):
+    """
+    Least-squares scale/bias on out-of-fold predictions. Least squares
+    minimizes MSE, not MAE, so the fit is only kept when it lowers the
+    pooled out-of-fold MAE; otherwise identity (scale 1, bias 0).
+    """
+
+    fit_scale, fit_bias = fit_linear(pred, target)
+    cal = (fit_scale * pred + fit_bias).clip(
+        config.PAIN_SCORE_MIN, config.PAIN_SCORE_MAX
     )
-    return runs, oof[0], oof[1]
+    mae_raw = float(np.abs(pred - target).mean())
+    mae_cal = float(np.abs(cal - target).mean())
+    use_fit = mae_cal < mae_raw
+
+    return {
+        "fitted_scale": fit_scale,
+        "fitted_bias": fit_bias,
+        "oof_mae_raw": mae_raw,
+        "oof_mae_with_fit": mae_cal,
+        "applied": bool(use_fit),
+        "scale": fit_scale if use_fit else 1.0,
+        "bias": fit_bias if use_fit else 0.0,
+    }
+
+
+def save_feature_checkpoint(path, models, variant, settings, scale, bias,
+                            purpose):
+    """Save head(s) + frozen backbone weights (loads offline)."""
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(
+        {
+            "state_dict": models[0].state_dict(),
+            "state_dicts": [m.state_dict() for m in models],
+            "variant": variant,
+            "purpose": purpose,
+            "seq_len": config.SEQ_LEN,
+            "stride": config.SEQ_STRIDE,
+            "training_settings": settings,
+            "scale": scale,
+            "bias": bias,
+            # Frozen ImageNet weights stored with the head so nothing
+            # is downloaded at run time.
+            "backbone_state_dict": imagenet_backbone().state_dict(),
+        },
+        path
+    )
 
 
 def summarize(runs, names):

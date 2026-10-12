@@ -10,9 +10,10 @@ simulated-webcam frames and at frame spacing 5 / 7.
 
 Writes results/cross_validation.json and prints the tables.
 
---final also trains FINAL_VARIANT on all 40 videos and saves the live
-model checkpoints/pain_intensity_features.pt (head(s) + backbone
-weights, so the demo runs offline).
+--final also trains on all 40 videos and saves
+    checkpoints/pain_intensity_features.pt  live model (FINAL_VARIANT)
+    checkpoints/pain_intensity_image.pt     single-photo model ("frame")
+(head(s) + backbone weights, so both run offline).
 
 Run:
     python cross_validate.py --epochs 30 --seeds 3 --final
@@ -22,25 +23,28 @@ import argparse
 import json
 import os
 
-import numpy as np
-import torch
-
 from painsense import config
 from painsense.features import (
     BASELINES,
     DISPLAY,
     TRAINED_VARIANTS,
-    fit_linear,
+    decide_calibration,
     make_spec,
     paired,
     prepare_bank,
     print_table,
     run_cv,
+    save_feature_checkpoint,
     summarize,
     train_spec,
 )
-from painsense.models import imagenet_backbone
 from painsense.utils import seed_everything
+
+# Saved by --final: (checkpoint path, variant, purpose).
+FINAL_MODELS = (
+    (config.FEATURE_CKPT, config.FINAL_VARIANT, "live"),
+    (config.IMAGE_CKPT, "frame", "photo"),
+)
 
 
 # =========================================================
@@ -56,8 +60,7 @@ def main():
                     help="first seed; seeds are seed, seed+1, ...")
     ap.add_argument("--rebuild-cache", action="store_true")
     ap.add_argument("--final", action="store_true",
-                    help=f"train {config.FINAL_VARIANT} on all videos and save "
-                         f"{os.path.basename(config.FEATURE_CKPT)}")
+                    help="train the live and photo models on all videos")
     ap.add_argument("--out", default=os.path.join(
         config.RESULTS_DIR, "cross_validation.json"))
     args = ap.parse_args()
@@ -78,9 +81,9 @@ def main():
         f"strides={settings['strides']} ensemble={settings['ensemble']}"
     )
 
-    runs, oof_pred, oof_target = run_cv(
+    runs, oof = run_cv(
         bank, specs, args.folds, args.seeds, args.epochs, args.seed,
-        oof_key=config.FINAL_VARIANT
+        oof_keys=tuple({v for _, v, _ in FINAL_MODELS})
     )
 
     names = list(TRAINED_VARIANTS) + list(BASELINES)
@@ -104,33 +107,18 @@ def main():
                 f"first better in {c['a_better_in']}/{c['runs']} runs"
             )
 
-    # Least squares minimizes MSE, not MAE, so the fit is only kept when
-    # it lowers the pooled out-of-fold MAE. Otherwise identity.
-    fit_scale, fit_bias = fit_linear(oof_pred, oof_target)
-    cal = (fit_scale * oof_pred + fit_bias).clip(
-        config.PAIN_SCORE_MIN, config.PAIN_SCORE_MAX
-    )
-    mae_raw = float(np.abs(oof_pred - oof_target).mean())
-    mae_cal = float(np.abs(cal - oof_target).mean())
-    use_fit = mae_cal < mae_raw
-    scale, bias = (fit_scale, fit_bias) if use_fit else (1.0, 0.0)
-    calibration = {
-        "fitted_scale": fit_scale,
-        "fitted_bias": fit_bias,
-        "oof_mae_raw": mae_raw,
-        "oof_mae_with_fit": mae_cal,
-        "applied": bool(use_fit),
-        "scale": scale,
-        "bias": bias,
-        "note": "least-squares fit on pooled out-of-fold predictions of "
-                "FINAL_VARIANT; applied only if it lowers out-of-fold MAE",
-    }
-    print(
-        f"\n{config.FINAL_VARIANT} out-of-fold calibration: fitted "
-        f"scale={fit_scale:.3f} bias={fit_bias:.3f}; OOF MAE raw "
-        f"{mae_raw:.3f} vs with fit {mae_cal:.3f} -> "
-        f"{'applied' if use_fit else 'NOT applied (identity)'}"
-    )
+    calibration = {}
+
+    for _, variant, purpose in FINAL_MODELS:
+        cal = decide_calibration(*oof[variant])
+        calibration[purpose] = {"variant": variant, **cal}
+        print(
+            f"\n{purpose} model ({variant}) out-of-fold calibration: fitted "
+            f"scale={cal['fitted_scale']:.3f} bias={cal['fitted_bias']:.3f}; "
+            f"OOF MAE raw {cal['oof_mae_raw']:.3f} vs with fit "
+            f"{cal['oof_mae_with_fit']:.3f} -> "
+            f"{'applied' if cal['applied'] else 'NOT applied (identity)'}"
+        )
 
     result = {
         "target": "expression intensity on a synthetic morph scale (0-10)",
@@ -158,28 +146,19 @@ def main():
     }
 
     if args.final:
-        print(f"\n--final: training {config.FINAL_VARIANT} on all videos ...")
-        spec = make_spec(config.FINAL_VARIANT, **settings)
-        models = train_spec(spec, bank, bank.names, args.epochs, args.seed)
-        os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
-        torch.save(
-            {
-                "state_dict": models[0].state_dict(),
-                "state_dicts": [m.state_dict() for m in models],
-                "variant": config.FINAL_VARIANT,
-                "seq_len": config.SEQ_LEN,
-                "stride": config.SEQ_STRIDE,
-                "training_settings": result["training_settings"],
-                "scale": scale,
-                "bias": bias,
-                # Frozen ImageNet weights stored with the head so the
-                # live demo needs no download.
-                "backbone_state_dict": imagenet_backbone().state_dict(),
-            },
-            config.FEATURE_CKPT
-        )
-        result["final_checkpoint"] = config.FEATURE_CKPT
-        print(f"Saved {config.FEATURE_CKPT} ({len(models)} head(s))")
+        result["final_checkpoints"] = {}
+
+        for path, variant, purpose in FINAL_MODELS:
+            print(f"\n--final: training {purpose} model ({variant}) on all videos ...")
+            spec = make_spec(variant, **settings)
+            models = train_spec(spec, bank, bank.names, args.epochs, args.seed)
+            save_feature_checkpoint(
+                path, models, variant, result["training_settings"],
+                calibration[purpose]["scale"], calibration[purpose]["bias"],
+                purpose
+            )
+            result["final_checkpoints"][purpose] = path
+            print(f"Saved {path} ({len(models)} head(s))")
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
 
