@@ -93,10 +93,13 @@ N_HELDOUT_AUG = 2
 
 # Settings of the live model, chosen by robustness_study.py
 # (results/robustness_study.json). cross_validate.py --final uses them.
+# Study result: augmentation lowers sim-webcam MAE by 0.4-0.5 (12-14 of
+# 15 runs); stride jitter and the ensemble change nothing measurable
+# (the ensemble was adopted by the fixed rule on a 0.006 margin).
 FINAL_VARIANT = "lstm"      # "frame", "pool" or "lstm"
-FINAL_AUG = False           # train with webcam-style variants
+FINAL_AUG = True            # train with webcam-style variants
 FINAL_STRIDES = (6,)        # training window spacings (frames)
-FINAL_ENSEMBLE = 1          # heads averaged in the final model
+FINAL_ENSEMBLE = 5          # heads averaged in the final model
 
 # =========================================================
 # Score and alert

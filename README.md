@@ -144,19 +144,56 @@ python live_camera.py --video data\videos\raw\SynPain\Videos\1100031270_Pain_man
 
 ## Results
 
-From `results/cross_validation.json`: stratified 5-fold CV **by video**, 3 seeds (15 fold-runs), 40 videos / 3085 windows, frozen ImageNet ResNet18 features, 30 epochs. Metrics are on the **last frame** of every window, mean ± std over the 15 fold-runs.
+All numbers below are written by the scripts to `results/cross_validation.json` and `results/robustness_study.json` (never edited by hand). Setup: stratified 5-fold cross-validation **by video**, 3 seeds = 15 fold-runs, 40 videos / 3085 windows, frozen ImageNet ResNet18 features, 30 epochs. Every metric is on the **last frame** of each window; mean ± std over the 15 fold-runs.
+
+### Final models (`python cross_validate.py`)
+
+Trained with the live settings (webcam-style augmentation, ensemble of 5 heads). Clean test frames:
 
 | Model | MAE | RMSE | Pearson | Spearman | Alert macro-F1 |
 |---|---|---|---|---|---|
-| frame-only | 1.932 ± 0.258 | 2.617 ± 0.276 | 0.726 ± 0.071 | 0.711 ± 0.092 | 0.641 ± 0.078 |
-| causal mean-pool | 1.947 ± 0.472 | 2.606 ± 0.530 | 0.750 ± 0.146 | 0.723 ± 0.186 | 0.662 ± 0.152 |
-| LSTM | 1.782 ± 0.590 | 2.536 ± 0.608 | 0.750 ± 0.164 | 0.734 ± 0.172 | 0.758 ± 0.110 |
+| **LSTM, 5 heads (live model)** | 1.833 ± 0.619 | 2.419 ± 0.606 | 0.755 ± 0.160 | 0.723 ± 0.181 | 0.766 ± 0.085 |
+| frame-only, 5 heads | 1.947 ± 0.355 | 2.564 ± 0.375 | 0.739 ± 0.086 | 0.715 ± 0.114 | 0.643 ± 0.104 |
+| causal mean-pool, 5 heads | 2.028 ± 0.533 | 2.593 ± 0.570 | 0.751 ± 0.142 | 0.712 ± 0.189 | 0.636 ± 0.157 |
 | always 0 (no image) | 3.410 ± 0.181 | 4.971 ± 0.139 | n/a | n/a | 0.409 ± 0.007 |
 | train-mean (no image) | 3.353 ± 0.029 | 3.622 ± 0.029 | n/a | n/a | 0.409 ± 0.007 |
 
-All three image models are far better than the no-image baselines. The LSTM has the lowest mean MAE, but the fold-to-fold spread is larger than the gaps between models (LSTM − frame-only: −0.149 ± 0.376, LSTM better in 10/15 runs), so this data does **not** establish that the LSTM beats frame-only or pooling.
+Robustness of the same models (MAE; the simulated-webcam frames come from a **harsher distortion family than training uses**, including gamma shifts and motion blur training never sees):
 
-These numbers predate the robustness study (webcam-style augmentation, timing jitter, ensemble); this section is updated when that study finishes.
+| Model | Clean | Simulated webcam | Spacing 5 | Spacing 7 | Sim-webcam alert F1 |
+|---|---|---|---|---|---|
+| **LSTM, 5 heads (live model)** | 1.833 ± 0.619 | 2.594 ± 0.687 | 1.800 ± 0.601 | 1.900 ± 0.625 | 0.652 ± 0.099 |
+| frame-only, 5 heads | 1.947 ± 0.355 | 2.651 ± 0.353 | 1.912 ± 0.333 | 2.001 ± 0.367 | 0.565 ± 0.075 |
+| causal mean-pool, 5 heads | 2.028 ± 0.533 | 2.612 ± 0.511 | 1.957 ± 0.482 | 2.136 ± 0.561 | 0.526 ± 0.077 |
+
+Paired, same folds: LSTM − frame-only clean -0.114 ± 0.372 (10/15), sim-webcam -0.057 ± 0.438 (7/15); LSTM − mean-pool clean -0.195 ± 0.327 (13/15), sim-webcam -0.018 ± 0.240 (6/15) (negative = LSTM better; "(k/15)" = runs where it was better).
+
+### What the robustness study found (`python robustness_study.py`)
+
+Averaged over the three heads:
+
+| Training setting | Clean MAE | Sim-webcam MAE | Spacing 5 | Spacing 7 |
+|---|---|---|---|---|
+| plain (before) | 1.903 | 3.074 | 1.852 | 1.986 |
+| + webcam-style augmentation | 1.928 | 2.625 | 1.888 | 2.000 |
+| + timing jitter (spacing 5/6/7) | 1.892 | 3.084 | 1.843 | 1.975 |
+| + both | 1.882 | 2.630 | 1.836 | 1.961 |
+
+| Change (paired, same folds) | Clean MAE change | Sim-webcam MAE change |
+|---|---|---|
+| lstm+aug vs lstm | +0.045 ± 0.376 (8/15) | -0.495 ± 0.551 (13/15) |
+| frame+aug vs frame | -0.010 ± 0.274 (10/15) | -0.387 ± 0.403 (12/15) |
+| pool+aug vs pool | +0.042 ± 0.319 (6/15) | -0.467 ± 0.386 (14/15) |
+| lstm+stride5/6/7 vs lstm | -0.062 ± 0.165 (10/15) | -0.039 ± 0.211 (9/15) |
+| lstm+aug+ens5 vs lstm+aug | -0.015 ± 0.224 (8/15) | -0.023 ± 0.128 (8/15) |
+
+- **Webcam-style augmentation clearly helps on webcam-like input.** Simulated-webcam MAE drops by about 0.4–0.5 for every head and is better in 12–14 of 15 runs, while clean accuracy stays the same.
+- **Timing jitter makes no measurable difference**, so it is off.
+- **A 5-head ensemble makes no measurable difference** either (better in 8/15 runs). The rule fixed before the study adopted it on a 0.006 margin. It is harmless at run time (ResNet still runs once per frame; only the tiny heads are repeated).
+- **LSTM vs frame-only vs pooling is still not settled.** LSTM has the lowest mean MAE and the best alert F1, but the paired differences are smaller than their spread, and on simulated-webcam frames the three are effectively tied.
+- **Picking the best of several settings on the same folds is slightly optimistic.** The simulated-webcam test is a proxy; only a real webcam shows real behaviour.
+
+Score calibration: a least-squares fit on out-of-fold predictions raised MAE (1.834 → 1.935), so it is **not** applied (scale 1, bias 0).
 
 Original model for reference (`pain_intensity.pt`, original 6-video validation split, consecutive frames, `python evaluate.py --ckpt checkpoints/pain_intensity.pt --split old_val --stride 1`): MAE 1.689 over all timesteps, 1.723 on the last frame; always-0 baseline 2.374 / 2.517. Six videos only, so noisy.
 
@@ -170,6 +207,7 @@ Original model for reference (`pain_intensity.pt`, original 6-video validation s
 | Alert | median of last 5 scores ≥ 6 on, < 4 off |
 | Live min face size | 60×60 px |
 | Full-model split | stratified by video: 28 train / 6 val / 6 test |
+| Live model | LSTM head ×5 (ensemble), trained with webcam-style augmentation |
 | Learning rate | head 1e-3, ResNet layer4 1e-4 (opt-in) |
 | Seed | 42 |
 | SQLite log | newest 100,000 rows |
