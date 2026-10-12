@@ -52,8 +52,7 @@ from model import (
     CNNClassifier,
     PainCNNLSTM,
     PainIntensityLSTM,
-    FeatureIntensityModel,
-    imagenet_backbone
+    load_feature_checkpoint
 )
 from utils import seed_everything
 
@@ -288,23 +287,20 @@ def _load_intensity_scorer(ckpt):
     payload = torch.load(ckpt, map_location=config.DEVICE)
 
     if isinstance(payload, dict) and "variant" in payload:
-        backbone = imagenet_backbone(
-            payload.get("backbone_state_dict")
-        ).to(config.DEVICE)
-        head = FeatureIntensityModel(payload["variant"]).to(config.DEVICE)
-        head.load_state_dict(payload["state_dict"])
-        head.eval()
+        backbone, head, payload = load_feature_checkpoint(ckpt)
 
         def fn(x):
             b, t = x.shape[:2]
             feats = backbone(x.reshape(b * t, *x.shape[2:]))
             return head(feats.reshape(b, t, -1))
 
+        n_heads = len(payload.get("state_dicts") or [None])
+
         return (
             fn,
             float(payload.get("scale", 1.0)),
             float(payload.get("bias", 0.0)),
-            f"feature model ({payload['variant']})"
+            f"feature model ({payload['variant']} x{n_heads})"
         )
 
     model = PainIntensityLSTM().to(config.DEVICE)

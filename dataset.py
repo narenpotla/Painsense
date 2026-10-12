@@ -846,3 +846,127 @@ def split_dataset(
     )
 
     return train_subset, val_subset
+
+
+# ---------------------------------------------------------
+# Webcam-style degradation (feature-cache augmentation)
+# ---------------------------------------------------------
+#
+# SynPAIN faces are clean, sharp and studio-lit. A laptop webcam gives
+# small, soft, noisy, JPEG-compressed faces with odd white balance and a
+# face box that jitters between frames. These functions simulate that.
+#
+# One parameter set is drawn per (video, variant): a clip is "filmed"
+# by one simulated camera. Box jitter and sensor noise change per frame.
+#
+# held_out=True draws from a DIFFERENT family (harsher ranges plus gamma
+# and motion blur, which training never uses). It is only for the
+# "simulated webcam" test set, so that test does not simply reward
+# training on the exact same distortion.
+
+def sample_webcam_params(rng, held_out=False):
+    """rng: numpy RandomState. Returns a dict of degradation params."""
+
+    u = rng.uniform
+
+    if not held_out:
+        return {
+            "flip": bool(rng.rand() < 0.5),
+            "angle": u(-8, 8),
+            "scale": u(0.88, 1.0),
+            "box_jitter": u(0.0, 0.03),
+            "brightness": u(0.65, 1.35),
+            "contrast": u(0.7, 1.3),
+            "saturation": u(0.6, 1.3),
+            "gain_r": u(0.9, 1.1),
+            "gain_b": u(0.9, 1.1),
+            "lowres": u(0.4, 0.9),
+            "blur": u(0.0, 1.0),
+            "noise": u(0.0, 6.0),
+            "jpeg": int(rng.randint(40, 90)),
+            "gamma": 1.0,
+            "motion": 0,
+        }
+
+    return {
+        "flip": bool(rng.rand() < 0.5),
+        "angle": u(-10, 10),
+        "scale": u(0.85, 1.0),
+        "box_jitter": u(0.01, 0.04),
+        "brightness": u(0.55, 1.45),
+        "contrast": u(0.6, 1.2),
+        "saturation": u(0.5, 1.2),
+        "gain_r": u(0.85, 1.15),
+        "gain_b": u(0.85, 1.15),
+        "lowres": u(0.25, 0.6),
+        "blur": u(0.3, 1.4),
+        "noise": u(3.0, 10.0),
+        "jpeg": int(rng.randint(20, 55)),
+        "gamma": u(0.7, 1.4),
+        "motion": int(rng.choice([0, 3, 5])),
+    }
+
+
+def apply_webcam(img, p, rng):
+    """
+    Degrade one PIL RGB face crop with params p.
+    rng: numpy RandomState for the per-frame parts (box jitter, noise).
+    Returns a PIL image of the same size.
+    """
+
+    import io
+
+    import numpy as np
+
+    w, h = img.size
+
+    if p["flip"]:
+        img = ImageOps.mirror(img)
+
+    # Face-box geometry: fixed rotation/scale, per-frame jitter.
+    img = img.rotate(p["angle"], resample=Image.BILINEAR)
+    cw, ch = w * p["scale"], h * p["scale"]
+    jx = rng.uniform(-1, 1) * p["box_jitter"] * w
+    jy = rng.uniform(-1, 1) * p["box_jitter"] * h
+    x0 = min(max((w - cw) / 2 + jx, 0), w - cw)
+    y0 = min(max((h - ch) / 2 + jy, 0), h - ch)
+    img = img.crop((x0, y0, x0 + cw, y0 + ch)).resize((w, h), Image.BILINEAR)
+
+    # Exposure and white balance.
+    img = ImageEnhance.Brightness(img).enhance(p["brightness"])
+    img = ImageEnhance.Contrast(img).enhance(p["contrast"])
+    img = ImageEnhance.Color(img).enhance(p["saturation"])
+
+    arr = np.asarray(img).astype(np.float32)
+    arr[..., 0] *= p["gain_r"]
+    arr[..., 2] *= p["gain_b"]
+
+    if p["gamma"] != 1.0:
+        arr = 255.0 * (np.clip(arr, 0, 255) / 255.0) ** p["gamma"]
+
+    img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+
+    # Small, soft face: downscale then upscale, blur, motion blur.
+    lw, lh = max(8, int(w * p["lowres"])), max(8, int(h * p["lowres"]))
+    img = img.resize((lw, lh), Image.BILINEAR).resize((w, h), Image.BILINEAR)
+
+    if p["blur"] > 0:
+        img = img.filter(ImageFilter.GaussianBlur(p["blur"]))
+
+    if p["motion"]:
+        k = p["motion"]
+        kernel = [0.0] * (k * k)
+        for i in range(k):
+            kernel[(k // 2) * k + i] = 1.0 / k
+        img = img.filter(ImageFilter.Kernel((k, k), kernel, scale=1.0))
+
+    # Sensor noise (per frame), then JPEG.
+    if p["noise"] > 0:
+        arr = np.asarray(img).astype(np.float32)
+        arr += rng.normal(0.0, p["noise"], arr.shape)
+        img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=p["jpeg"])
+    buf.seek(0)
+    return Image.open(buf).convert("RGB")

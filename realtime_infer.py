@@ -66,9 +66,8 @@ import data_prep
 from data_prep import crop_face
 from dataset import frame_transform
 from model import (
-    FeatureIntensityModel,
     PainIntensityLSTM,
-    imagenet_backbone
+    load_feature_checkpoint
 )
 from utils import seed_everything
 
@@ -173,10 +172,7 @@ def load_scorer():
     """
 
     if os.path.exists(config.FEATURE_CKPT):
-        payload = torch.load(
-            config.FEATURE_CKPT,
-            map_location=config.DEVICE
-        )
+        backbone, head, payload = load_feature_checkpoint(config.FEATURE_CKPT)
 
         if payload.get("seq_len") != config.SEQ_LEN:
             raise RuntimeError(
@@ -192,24 +188,19 @@ def load_scorer():
                 f"{config.SEQ_STRIDE}; live spacing differs from training."
             )
 
-        # Stored backbone weights: no download needed (offline demo).
-        backbone = imagenet_backbone(
-            payload.get("backbone_state_dict")
-        ).to(config.DEVICE)
-        head = FeatureIntensityModel(
-            payload.get("variant", "lstm")
-        ).to(config.DEVICE)
-        head.load_state_dict(payload["state_dict"])
-        head.eval()
-
-        print(f"Loaded feature checkpoint: {config.FEATURE_CKPT}")
+        n_heads = len(payload.get("state_dicts") or [None])
+        variant = payload.get("variant", "lstm")
+        print(
+            f"Loaded feature checkpoint: {config.FEATURE_CKPT} "
+            f"({variant}, {n_heads} head(s))"
+        )
 
         return LiveScorer(
             backbone,
             head,
             float(payload.get("scale", 1.0)),
             float(payload.get("bias", 0.0)),
-            "features:" + payload.get("variant", "lstm")
+            f"features:{variant} x{n_heads}"
         )
 
     print(

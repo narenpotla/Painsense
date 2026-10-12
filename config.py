@@ -100,6 +100,20 @@ MIN_VALID_SEQUENCE = SEQ_LEN
 # inference. Derived from the training stride so live spacing = training spacing.
 CAPTURE_INTERVAL_SEC = SEQ_STRIDE / VIDEO_FPS
 
+# ---------------- Feature model (cv_intensity.py / live demo) ----------------
+# Webcam-style feature-cache variants per frame: used for training
+# augmentation, and a separate held-out family for the "simulated
+# webcam" test (see dataset.sample_webcam_params).
+N_TRAIN_AUG = 4
+N_HELDOUT_AUG = 2
+
+# Settings of the final live model. Chosen by cv_robustness.py
+# (results/cv_robustness.json); cv_intensity.py --final uses them.
+FINAL_VARIANT = "lstm"
+FINAL_AUG = False
+FINAL_STRIDES = (6,)        # training window spacings (frames)
+FINAL_ENSEMBLE = 1          # heads averaged in the final model
+
 # Smallest face (pixels) accepted from a live webcam. Larger than the
 # 40 px used for the SynPAIN crops to cut Haar false positives on
 # background clutter. The crop recipe itself is unchanged.

@@ -171,6 +171,16 @@ class ModelTest(unittest.TestCase):
             self.assertEqual(tuple(a.shape), (2, 8))
             torch.testing.assert_close(a[:, :5], b[:, :5])
 
+    def test_ensemble_averages_heads(self):
+        torch.manual_seed(0)
+        heads = [model.FeatureIntensityModel("lstm").eval() for _ in range(3)]
+        ens = model.FeatureEnsemble(heads).eval()
+        x = torch.randn(2, 8, config.FEATURE_DIM)
+
+        with torch.no_grad():
+            expected = torch.stack([h(x) for h in heads]).mean(0)
+            torch.testing.assert_close(ens(x), expected)
+
     def test_backbone_bn_stays_in_eval(self):
         m = model.PainIntensityLSTM()
         m.train()
@@ -209,9 +219,9 @@ class ModelTest(unittest.TestCase):
         self.assertEqual(payload["seq_len"], config.SEQ_LEN)
         self.assertEqual(payload["stride"], config.SEQ_STRIDE)
 
-        backbone = model.imagenet_backbone(payload["backbone_state_dict"])
-        head = model.FeatureIntensityModel(payload["variant"])
-        head.load_state_dict(payload["state_dict"])
+        backbone, head, _ = model.load_feature_checkpoint(
+            config.FEATURE_CKPT, device="cpu"
+        )
 
         with torch.no_grad():
             feats = backbone(torch.randn(8, 3, 224, 224)).unsqueeze(0)
@@ -236,6 +246,35 @@ class CropTest(unittest.TestCase):
         # Box touching the corner: margin is clipped, still a valid crop.
         crop = data_prep.crop_from_box(image, (0, 0, 40, 40))
         self.assertEqual(crop.shape, (config.CROP_SIZE, config.CROP_SIZE, 3))
+
+
+class WebcamAugTest(unittest.TestCase):
+
+    def test_shape_and_determinism(self):
+        image = Image.fromarray(
+            np.random.RandomState(1).randint(0, 255, (128, 128, 3), dtype=np.uint8)
+        )
+
+        for held_out in (False, True):
+            params = dataset.sample_webcam_params(
+                np.random.RandomState(7), held_out=held_out
+            )
+            a = dataset.apply_webcam(image, params, np.random.RandomState(3))
+            b = dataset.apply_webcam(image, params, np.random.RandomState(3))
+            self.assertEqual(a.size, image.size)
+            np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+
+    def test_held_out_family_differs(self):
+        rng = np.random.RandomState(0)
+        train = [dataset.sample_webcam_params(rng) for _ in range(200)]
+        held = [dataset.sample_webcam_params(rng, held_out=True) for _ in range(200)]
+
+        self.assertTrue(all(p["gamma"] == 1.0 and p["motion"] == 0 for p in train))
+        self.assertTrue(any(p["motion"] > 0 for p in held))
+        self.assertLess(
+            np.mean([p["jpeg"] for p in held]),
+            np.mean([p["jpeg"] for p in train])
+        )
 
 
 class StorageTest(unittest.TestCase):

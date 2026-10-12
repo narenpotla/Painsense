@@ -400,3 +400,48 @@ def imagenet_backbone(state_dict=None):
         p.requires_grad = False
 
     return backbone
+
+
+class FeatureEnsemble(nn.Module):
+    """Average of several FeatureIntensityModel heads (same input/output)."""
+
+    def __init__(self, heads):
+        super().__init__()
+        self.heads = nn.ModuleList(heads)
+
+    def forward(self, feats):
+        return torch.stack([h(feats) for h in self.heads]).mean(dim=0)
+
+
+def load_feature_checkpoint(path, device=None):
+    """
+    Load checkpoints/pain_intensity_features.pt.
+
+    Returns (backbone, head, payload). head is a FeatureIntensityModel or
+    a FeatureEnsemble when the checkpoint stores several heads
+    ("state_dicts"). Uses the stored backbone weights when present, so
+    nothing is downloaded.
+    """
+
+    if device is None:
+        device = config.DEVICE
+
+    payload = torch.load(path, map_location=device)
+    variant = payload.get("variant", "lstm")
+    states = payload.get("state_dicts") or [payload["state_dict"]]
+
+    heads = []
+
+    for state in states:
+        head = FeatureIntensityModel(variant)
+        head.load_state_dict(state)
+        heads.append(head)
+
+    head = heads[0] if len(heads) == 1 else FeatureEnsemble(heads)
+    head = head.to(device).eval()
+
+    backbone = imagenet_backbone(
+        payload.get("backbone_state_dict")
+    ).to(device)
+
+    return backbone, head, payload
