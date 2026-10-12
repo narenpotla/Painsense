@@ -1,17 +1,19 @@
 """
-PainSense - PyTorch datasets using REAL SynPAIN video frames.
+painsense.data - labels, targets, windows, augmentation and splits.
 
-FrameDataset:
-    Reads real cropped face frames from:
-    data/videos/face_frames/<video_name>/*.jpg
+    get_video_label / list_labeled_videos   Pain / NoPain from folder names
+    frame_intensity / export_intensity_manifest
+                                            the generated 0-10 target
+    valid_window_starts / window_numbers    SEQ_LEN-frame windows, SEQ_STRIDE apart
+    augment_clip                            one augmentation per clip (full model)
+    sample_webcam_params / apply_webcam     webcam-style degradation (feature cache)
+    IntensitySequenceDataset                image windows for train_full_model.py
+    stratified_group_split / split_dataset_3way / stratified_kfold_videos /
+    split_dataset                           video-level splits (never by window)
 
-SequenceDataset:
-    Builds real consecutive 8-frame sequences from the same video.
-    Each sequence receives the video's real Pain / NoPain label.
-
-Labels:
-    0 = NoPain
-    1 = Pain
+Target: expression intensity on a synthetic morph scale. Pain clips rise
+linearly from 0 (first frame) to 10 (last frame); NoPain clips are 0.
+Folders video_001..video_040 have no label in their name and are skipped.
 """
 
 import os
@@ -24,7 +26,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
-import config
+from painsense import config
 
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -37,15 +39,6 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 
 frame_transform = transforms.Compose([
     transforms.Resize((config.IMG_SIZE, config.IMG_SIZE)),
-    transforms.ToTensor(),
-    transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
-])
-
-
-train_frame_transform = transforms.Compose([
-    transforms.Resize((config.IMG_SIZE, config.IMG_SIZE)),
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(brightness=0.15, contrast=0.15),
     transforms.ToTensor(),
     transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
 ])
@@ -206,247 +199,7 @@ def export_intensity_manifest(frames_dir=None, manifest_path=None):
 
 
 # ---------------------------------------------------------
-# Frame Dataset
-# ---------------------------------------------------------
-
-class FrameDataset(Dataset):
-    """
-    Reads real cropped SynPAIN face frames.
-
-    Expected structure:
-
-    data/videos/face_frames/
-        1000026870_NoPain_man_Young/
-            frame_000001.jpg
-            frame_000002.jpg
-            ...
-
-        1100031270_Pain_man_Young/
-            frame_000001.jpg
-            frame_000002.jpg
-            ...
-    """
-
-    def __init__(
-        self,
-        frames_dir=None,
-        train=True
-    ):
-
-        if frames_dir is None:
-            frames_dir = config.VIDEO_FACE_DIR
-
-        self.samples = []
-        self.groups = []
-
-        # Only folders whose name carries a Pain / NoPain label.
-        # video_001 ... video_040 are label-free copies and are skipped.
-        labeled = list_labeled_videos(frames_dir)
-
-        if not labeled:
-            raise RuntimeError(
-                f"No labeled video face folders found in {frames_dir}"
-            )
-
-        for video_name, label, video_folder in labeled:
-
-            frame_files = sorted(
-                glob.glob(os.path.join(video_folder, "*.jpg")),
-                key=get_frame_number
-            )
-
-            for frame_path in frame_files:
-
-                self.samples.append(
-                    (frame_path, label)
-                )
-
-                # Store the video name.
-                # This is important because validation must be
-                # separated by video rather than by individual frame.
-                self.groups.append(video_name)
-
-        if not self.samples:
-            raise RuntimeError(
-                f"No face frames found in {frames_dir}"
-            )
-
-        self.transform = (
-            train_frame_transform
-            if train
-            else frame_transform
-        )
-
-        print(
-            f"FrameDataset: {len(self.samples)} real face frames "
-            f"from {len(set(self.groups))} videos"
-        )
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-
-        path, label = self.samples[idx]
-
-        img = Image.open(path).convert("RGB")
-
-        return (
-            self.transform(img),
-            torch.tensor(label, dtype=torch.long)
-        )
-
-
-# ---------------------------------------------------------
-# Sequence Dataset
-# ---------------------------------------------------------
-
-class SequenceDataset(Dataset):
-    """
-    Builds REAL temporal sequences directly from SynPAIN
-    video face frames.
-
-    Example:
-
-        frame_000001
-        frame_000002
-        frame_000003
-        ...
-        frame_000008
-
-        becomes one sequence.
-
-    Sequence shape:
-
-        (T, C, H, W)
-
-    Target shape:
-
-        (T,)
-
-    Since SynPAIN provides a video-level Pain/NoPain label,
-    the label is repeated for every timestep.
-
-    Example for a Pain video:
-
-        target = [1,1,1,1,1,1,1,1]
-
-    Example for a NoPain video:
-
-        target = [0,0,0,0,0,0,0,0]
-    """
-
-    def __init__(
-        self,
-        seq_dir=None,
-        train=True
-    ):
-
-        if seq_dir is None:
-            seq_dir = config.VIDEO_FACE_DIR
-
-        self.samples = []
-        self.groups = []
-
-        labeled = list_labeled_videos(seq_dir)
-
-        if not labeled:
-            raise RuntimeError(
-                f"No labeled video face folders found in {seq_dir}"
-            )
-
-        sequence_length = config.SEQ_LEN
-
-        for video_name, label, video_folder in labeled:
-
-            frame_files = sorted(
-                glob.glob(os.path.join(video_folder, "*.jpg")),
-                key=get_frame_number
-            )
-
-            # Build sequences ONLY from truly consecutive frame numbers.
-            #
-            # This prevents us from joining frame 20 and frame 22
-            # when frame 21 was skipped by face detection.
-            for start in range(
-                0,
-                len(frame_files) - sequence_length + 1
-            ):
-
-                candidate = frame_files[
-                    start:start + sequence_length
-                ]
-
-                numbers = [
-                    get_frame_number(path)
-                    for path in candidate
-                ]
-
-                expected = list(
-                    range(
-                        numbers[0],
-                        numbers[0] + sequence_length
-                    )
-                )
-
-                if numbers != expected:
-                    continue
-
-                self.samples.append(
-                    candidate
-                )
-
-                self.groups.append(video_name)
-
-        if not self.samples:
-            raise RuntimeError(
-                f"No real {sequence_length}-frame sequences could "
-                f"be created from {seq_dir}"
-            )
-
-        self.transform = frame_transform
-
-        print(
-            f"SequenceDataset: {len(self.samples)} real "
-            f"{sequence_length}-frame sequences "
-            f"from {len(set(self.groups))} videos"
-        )
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-
-        frame_paths = self.samples[idx]
-
-        video_name = self.groups[idx]
-
-        label = get_video_label(video_name)
-
-        tensors = []
-
-        for frame_path in frame_paths:
-
-            img = Image.open(frame_path).convert("RGB")
-
-            tensors.append(
-                self.transform(img)
-            )
-
-        seq_tensor = torch.stack(tensors)
-
-        # Binary Pain/NoPain target repeated for each frame.
-        target_tensor = torch.full(
-            (len(frame_paths),),
-            float(label),
-            dtype=torch.float32
-        )
-
-        return seq_tensor, target_tensor
-
-
-# ---------------------------------------------------------
-# Window helpers (shared with cv_intensity.py)
+# Window helpers (shared with painsense.features)
 # ---------------------------------------------------------
 
 def valid_window_starts(frame_numbers, seq_len=None, stride=None):

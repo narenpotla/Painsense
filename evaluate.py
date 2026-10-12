@@ -1,24 +1,22 @@
 """
-PainSense - evaluation using REAL SynPAIN video data.
+evaluate.py - score a checkpoint on held-out SynPAIN videos.
 
-Usage:
+Reports, on the LAST frame of every window: MAE, RMSE, Pearson,
+Spearman, alert-level macro-F1, MAE over all timesteps, per-video MAE
+and the "always predict 0" baseline. Works for both checkpoint kinds:
+the live feature model and the older full CNN-LSTM.
 
-    python evaluate.py --stage cnn
-    python evaluate.py --stage lstm
-    python evaluate.py --stage intensity [--ckpt PATH] [--split test|old_val]
+    --split test     the 6 test videos of the 28/6/6 split
+    --split old_val  the original 6-video validation split
+    --stride 1       consecutive frames (how pain_intensity.pt was trained)
 
-CNN:
-    Evaluates individual real face-frame classification.
+Note: the live model (cross_validate.py --final) is trained on ALL
+videos, so evaluating it here is in-sample. Honest numbers for it come
+from cross_validate.py.
 
-LSTM:
-    Evaluates real consecutive video-frame sequences.
-
-Intensity:
-    Evaluates the 0-10 "expression intensity on a synthetic morph
-    scale" regressor: MAE, RMSE, Pearson, Spearman, alert-level
-    macro-F1, per-video MAE and the "always predict 0" baseline.
-    Metrics use the LAST frame of every window (what the live demo
-    reports); all-timestep MAE is printed too.
+Run:
+    python evaluate.py
+    python evaluate.py --ckpt checkpoints/pain_intensity.pt --split old_val --stride 1
 """
 
 import argparse
@@ -31,247 +29,16 @@ import torch
 from torch.utils.data import DataLoader
 
 from scipy.stats import pearsonr, spearmanr
-from sklearn.metrics import (
-    accuracy_score,
-    confusion_matrix,
-    classification_report,
-    f1_score
-)
+from sklearn.metrics import f1_score
 
-import config
-
-from dataset import (
-    FrameDataset,
-    SequenceDataset,
+from painsense import config
+from painsense.data import (
     IntensitySequenceDataset,
     split_dataset,
     split_dataset_3way
 )
-
-from model import (
-    CNNClassifier,
-    PainCNNLSTM,
-    PainIntensityLSTM,
-    load_feature_checkpoint
-)
-from utils import seed_everything
-
-
-# =========================================================
-# CNN Evaluation
-# =========================================================
-
-def eval_cnn():
-
-    print()
-    print("======================================")
-    print("CNN EVALUATION")
-    print("======================================")
-
-    # Real SynPAIN face frames.
-    ds = FrameDataset(
-        train=False
-    )
-
-    # Use the same video-level split
-    # used during training.
-    _, val_ds = split_dataset(
-        ds
-    )
-
-    loader = DataLoader(
-        val_ds,
-        batch_size=config.BATCH_SIZE,
-        shuffle=False,
-        num_workers=0
-    )
-
-    model = CNNClassifier().to(
-        config.DEVICE
-    )
-
-    model.load_state_dict(
-        torch.load(
-            config.CNN_CKPT,
-            map_location=config.DEVICE
-        )
-    )
-
-    model.eval()
-
-    y_true = []
-    y_pred = []
-
-    with torch.no_grad():
-
-        for x, y in loader:
-
-            x = x.to(
-                config.DEVICE
-            )
-
-            logits = model(x)
-
-            predictions = logits.argmax(
-                dim=1
-            )
-
-            y_pred.extend(
-                predictions.cpu().tolist()
-            )
-
-            y_true.extend(
-                y.tolist()
-            )
-
-    accuracy = accuracy_score(
-        y_true,
-        y_pred
-    )
-
-    print()
-    print(
-        f"CNN Accuracy: {accuracy:.4f}"
-    )
-
-    print()
-    print(
-        "Confusion matrix:"
-    )
-
-    print(
-        confusion_matrix(
-            y_true,
-            y_pred
-        )
-    )
-
-    print()
-    print(
-        "Classification report:"
-    )
-
-    print(
-        classification_report(
-            y_true,
-            y_pred,
-            target_names=[
-                "NoPain",
-                "Pain"
-            ],
-            zero_division=0
-        )
-    )
-
-
-# =========================================================
-# CNN-LSTM Evaluation
-# =========================================================
-
-def eval_lstm():
-
-    print()
-    print("======================================")
-    print("REAL VIDEO CNN-LSTM EVALUATION")
-    print("======================================")
-
-    # Real consecutive video sequences.
-    ds = SequenceDataset(
-        train=False
-    )
-
-    # Same video-level validation split.
-    _, val_ds = split_dataset(
-        ds
-    )
-
-    loader = DataLoader(
-        val_ds,
-        batch_size=8,
-        shuffle=False,
-        num_workers=0
-    )
-
-    model = PainCNNLSTM().to(
-        config.DEVICE
-    )
-
-    model.load_state_dict(
-        torch.load(
-            config.CNNLSTM_CKPT,
-            map_location=config.DEVICE
-        )
-    )
-
-    model.eval()
-
-    all_true = []
-    all_pred = []
-
-    with torch.no_grad():
-
-        for x, y in loader:
-
-            x = x.to(
-                config.DEVICE
-            )
-
-            logits = model(x)
-
-            # logits:
-            # (B, T, 2)
-            #
-            # Convert to predicted class.
-            predictions = logits.argmax(
-                dim=-1
-            )
-
-            all_pred.extend(
-                predictions.cpu().reshape(-1).tolist()
-            )
-
-            all_true.extend(
-                y.long().reshape(-1).tolist()
-            )
-
-    accuracy = accuracy_score(
-        all_true,
-        all_pred
-    )
-
-    print()
-    print(
-        f"CNN-LSTM Accuracy: {accuracy:.4f}"
-    )
-
-    print()
-    print(
-        "Confusion matrix:"
-    )
-
-    print(
-        confusion_matrix(
-            all_true,
-            all_pred
-        )
-    )
-
-    print()
-    print(
-        "Classification report:"
-    )
-
-    print(
-        classification_report(
-            all_true,
-            all_pred,
-            target_names=[
-                "NoPain",
-                "Pain"
-            ],
-            zero_division=0
-        )
-    )
+from painsense.models import PainIntensityLSTM, load_feature_checkpoint
+from painsense.utils import seed_everything
 
 
 # =========================================================
@@ -375,9 +142,9 @@ def eval_intensity(ckpt=None, split="test", stride=None, seed=None):
 
         if description.startswith("feature model"):
             print(
-                "NOTE: cv_intensity.py --final trains on ALL videos, so "
+                "NOTE: cross_validate.py --final trains on ALL videos, so "
                 "these test videos are not held out for this checkpoint. "
-                "Use results/cv_intensity.json for honest numbers."
+                "Use results/cross_validation.json for honest numbers."
             )
 
     loader = DataLoader(eval_ds, batch_size=4, shuffle=False, num_workers=0)
@@ -440,74 +207,31 @@ def eval_intensity(ckpt=None, split="test", stride=None, seed=None):
     print()
 
 
-# =========================================================
-# Main
-# =========================================================
-
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--stage",
-        choices=[
-            "cnn",
-            "lstm",
-            "intensity"
-        ],
-        required=True
+def main():
+    ap = argparse.ArgumentParser(
+        description="Score a checkpoint on held-out SynPAIN videos."
     )
-
-    parser.add_argument(
-        "--ckpt",
-        default=None,
-        help="intensity stage: checkpoint to evaluate"
-    )
-
-    parser.add_argument(
-        "--split",
-        choices=["test", "old_val"],
-        default="test",
-        help=(
-            "intensity stage: 'test' = 3-way split test videos; "
-            "'old_val' = the original 6-video validation split"
-        )
-    )
-
-    parser.add_argument(
-        "--stride",
-        type=int,
-        default=None,
-        help=(
-            "intensity stage: frame spacing inside a window "
-            f"(default {config.SEQ_STRIDE}; use 1 to reproduce the "
-            "original pain_intensity.pt validation number)"
-        )
-    )
-
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=config.SEED
-    )
-
-    args = parser.parse_args()
+    ap.add_argument("--ckpt", default=None,
+                    help="checkpoint (default: live model if present, "
+                         "else checkpoints/pain_intensity.pt)")
+    ap.add_argument("--split", choices=["test", "old_val"], default="test",
+                    help="'test' = 3-way split test videos; "
+                         "'old_val' = the original 6-video validation split")
+    ap.add_argument("--stride", type=int, default=None,
+                    help=f"frame spacing in a window (default "
+                         f"{config.SEQ_STRIDE}; 1 reproduces pain_intensity.pt)")
+    ap.add_argument("--seed", type=int, default=config.SEED)
+    args = ap.parse_args()
 
     seed_everything(args.seed)
 
-    if args.stage == "cnn":
+    eval_intensity(
+        ckpt=args.ckpt,
+        split=args.split,
+        stride=args.stride,
+        seed=args.seed
+    )
 
-        eval_cnn()
 
-    elif args.stage == "intensity":
-
-        eval_intensity(
-            ckpt=args.ckpt,
-            split=args.split,
-            stride=args.stride,
-            seed=args.seed
-        )
-
-    else:
-
-        eval_lstm()
+if __name__ == "__main__":
+    main()

@@ -1,24 +1,19 @@
 """
-PainSense - database logging.
+painsense.db - SQLite log of live scores (logs/painsense.db).
 
-SQLite is used for the prototype.
+One row per scored live sample: timestamp, score (0-10, synthetic
+morph scale), probability (= score / 10, kept for older readers),
+prediction ("PAIN" when the alert is on), alert flag and reason.
 
-The database stores:
-    - timestamp
-    - pain probability
-    - prediction
-    - alert status
-    - alert reason
-
-The score column stores the 0-10 intensity estimate.
-probability stores that score divided by 10, for older dashboard reads.
+WAL mode lets the dashboard read while the camera writes; only the
+newest DB_MAX_ROWS rows are kept.
 """
 
 import sqlite3
 import time
 import os
 
-import config
+from painsense import config
 
 
 # =========================================================
@@ -49,7 +44,7 @@ def init_db():
 
     conn = get_conn()
 
-    # WAL lets the dashboard read while realtime_infer writes ~4 rows/s.
+    # WAL lets the dashboard read while live_camera writes ~4 rows/s.
     conn.execute("PRAGMA journal_mode=WAL")
 
     # Existing table is preserved.

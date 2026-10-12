@@ -1,12 +1,10 @@
 torch>=2.0
 torchvision>=0.15
 # opencv 5.x removed cv2.CascadeClassifier, which the face crop needs.
+# Install only one OpenCV package (not also opencv-python-headless).
 opencv-python>=4.8,<5
 numpy>=1.24
 Pillow>=10.0
-tqdm>=4.65
 scikit-learn>=1.3
 scipy>=1.10
 flask>=3.0
-huggingface_hub>=0.20
-# gpiozero>=2.0   # Raspberry Pi LEDs only; no current code imports it

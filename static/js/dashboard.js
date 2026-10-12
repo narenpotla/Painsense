@@ -71,7 +71,7 @@ function updateCapture(live, sequenceCurrent, sequenceTotal) {
     if (!live) {
         setText("captureHeader", "WAITING FOR CAMERA");
         setText("captureText", "OFFLINE");
-        setText("captureDescription", "realtime_infer.py is not running");
+        setText("captureDescription", "live_camera.py is not running");
         return;
     }
 

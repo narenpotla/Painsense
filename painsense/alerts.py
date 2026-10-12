@@ -1,5 +1,5 @@
 """
-PainSense - alert rules.
+painsense.alerts - when the live demo raises an alert.
 
 The live alert is stateful (AlertState):
     1. The score history is smoothed with a median over the last
@@ -15,7 +15,7 @@ The live alert is stateful (AlertState):
 from collections import deque
 from statistics import median
 
-import config
+from painsense import config
 
 
 def _clamp(score):

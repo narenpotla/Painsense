@@ -3,6 +3,10 @@ PainSense core tests (stdlib unittest, no extra dependencies).
 
 Run from the project root:
     python -m unittest discover -s tests -v
+
+Covers: alert rule, windows, video splits, clip augmentation, webcam
+augmentation, model causality / BatchNorm / ensemble, live checkpoint,
+face crop, SQLite log, dashboard state.
 """
 
 import os
@@ -18,10 +22,9 @@ from PIL import Image
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import config  # noqa: E402
-import alert_rules  # noqa: E402
-import dataset  # noqa: E402
-import model  # noqa: E402
+from painsense import alerts, config  # noqa: E402
+from painsense import data as dataset  # noqa: E402
+from painsense import models as model  # noqa: E402
 
 
 def _videos():
@@ -33,7 +36,7 @@ def _videos():
 class AlertStateTest(unittest.TestCase):
 
     def test_needs_full_window_and_median(self):
-        state = alert_rules.AlertState(window=5, on_threshold=6, off_threshold=4)
+        state = alerts.AlertState(window=5, on_threshold=6, off_threshold=4)
 
         # One very high frame never triggers on its own.
         self.assertFalse(state.update(10)[0])
@@ -45,7 +48,7 @@ class AlertStateTest(unittest.TestCase):
         self.assertTrue(state.update(7)[0])
 
     def test_hysteresis(self):
-        state = alert_rules.AlertState(window=5, on_threshold=6, off_threshold=4)
+        state = alerts.AlertState(window=5, on_threshold=6, off_threshold=4)
 
         for _ in range(5):
             state.update(8)
@@ -65,7 +68,7 @@ class AlertStateTest(unittest.TestCase):
         self.assertFalse(state.active)
 
     def test_reset_on_no_face(self):
-        state = alert_rules.AlertState(window=5)
+        state = alerts.AlertState(window=5)
 
         for _ in range(5):
             state.update(9)
@@ -76,9 +79,9 @@ class AlertStateTest(unittest.TestCase):
         self.assertFalse(state.active)
 
     def test_legacy_evaluate_still_works(self):
-        self.assertTrue(alert_rules.evaluate(7.0)[0])
-        self.assertFalse(alert_rules.evaluate(2.0)[0])
-        self.assertFalse(alert_rules.evaluate(9.0, face_detected=False)[0])
+        self.assertTrue(alerts.evaluate(7.0)[0])
+        self.assertFalse(alerts.evaluate(2.0)[0])
+        self.assertFalse(alerts.evaluate(9.0, face_detected=False)[0])
 
 
 class WindowTest(unittest.TestCase):
@@ -213,7 +216,7 @@ class ModelTest(unittest.TestCase):
                     "scale", "bias", "backbone_state_dict"):
             self.assertTrue(
                 key in payload,
-                f"{key} missing; rebuild with cv_intensity.py --final"
+                f"{key} missing; rebuild with cross_validate.py --final"
             )
 
         self.assertEqual(payload["seq_len"], config.SEQ_LEN)
@@ -234,7 +237,7 @@ class CropTest(unittest.TestCase):
 
     def test_crop_size_and_border_clip(self):
         try:
-            import data_prep
+            from painsense import face as data_prep
         except Exception as error:  # pragma: no cover
             self.skipTest(f"data_prep import failed: {error}")
 
@@ -280,7 +283,7 @@ class WebcamAugTest(unittest.TestCase):
 class StorageTest(unittest.TestCase):
 
     def test_db_prune_and_order(self):
-        import db
+        from painsense import db
 
         old = config.DB_PATH
 
@@ -303,7 +306,7 @@ class StorageTest(unittest.TestCase):
                 config.DB_PATH = old
 
     def test_dashboard_state_roundtrip(self):
-        import dashboard_state
+        from painsense import live_state as dashboard_state
 
         old = dashboard_state.STATE_FILE
 

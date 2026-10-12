@@ -1,44 +1,25 @@
 """
-PainSense - video-wise cross-validation of the intensity models.
+painsense.features - feature cache and the cross-validation engine.
 
-Target: expression intensity on a synthetic morph scale (0-10). It is
-linear in frame index for Pain videos and 0 for NoPain videos. It is
-NOT a clinical pain score.
+Shared by cross_validate.py and robustness_study.py.
 
-What it does:
-    1. Caches frozen ImageNet ResNet18 features once per labeled video
-       in data/features/: original and flipped frames, N_TRAIN_AUG
-       webcam-style training variants and N_HELDOUT_AUG held-out
-       "simulated webcam" variants (see dataset.apply_webcam).
-    2. Builds windows of SEQ_LEN frames, `stride` video frames apart.
-    3. Runs stratified k-fold CV by VIDEO (never by window), repeated
-       over several seeds, for:
-           frame-only       one frame at a time, no temporal context
-           causal mean-pool running mean of the window's features
-           LSTM             LSTM over the window
-           always 0         no-image baseline
-           train-mean       no-image baseline
-       The trained models use the FINAL_* settings in config.py
-       (augmentation, training strides, ensemble size).
-    4. Every metric is computed on the LAST frame of each window, on:
-           clean            the real test frames, spacing 6
-           sim-webcam       held-out degraded copies of the test frames
-           spacing 5 / 7    clean test frames at the wrong spacing
-    5. Writes results/cv_intensity.json and prints a table.
+    build_feature_cache    frozen ImageNet ResNet18 features of every
+                           labeled face frame (+ flipped) -> data/features/
+    build_aug_cache        webcam-style variants: N_TRAIN_AUG for training,
+                           N_HELDOUT_AUG (harsher family) for testing only
+    FeatureBank            all cached features in one table; windows are
+                           index arrays, so nothing is copied per window
+    make_spec / train_spec train one setting (variant, aug, strides, ensemble)
+    evaluate_models        metrics on clean, sim-webcam and spacing 5 / 7
+    run_cv                 stratified k-fold by VIDEO x seeds, identical
+                           folds for every setting
+    summarize / paired / print_table   reporting
 
-    --final trains FINAL_VARIANT on all videos and saves
-    checkpoints/pain_intensity_features.pt (head state dict(s), variant,
-    seq_len, stride, scale, bias, backbone weights). scale/bias come
-    from out-of-fold predictions of this run and are only applied if
-    they lower the out-of-fold MAE.
-
-Run:
-    python cv_intensity.py --epochs 30 --seeds 3 --final
+Every metric is computed on the LAST frame of each window (what the live
+demo shows). Target: expression intensity on a synthetic morph scale.
 """
 
-import argparse
 import glob
-import json
 import os
 import time
 import warnings
@@ -51,8 +32,8 @@ from PIL import Image, ImageOps
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import f1_score
 
-import config
-from dataset import (
+from painsense import config
+from painsense.data import (
     apply_webcam,
     frame_transform,
     frame_intensity,
@@ -63,8 +44,8 @@ from dataset import (
     valid_window_starts,
     window_numbers,
 )
-from model import FeatureIntensityModel, imagenet_backbone
-from utils import seed_everything
+from painsense.models import FeatureIntensityModel, imagenet_backbone
+from painsense.utils import seed_everything
 
 warnings.filterwarnings("ignore", message=".*constant.*")
 
@@ -628,153 +609,3 @@ def prepare_bank(rebuild_cache=False, n_train_aug=None, n_heldout_aug=None):
         f"{0 if bank.heldout is None else bank.heldout.shape[0]} held-out"
     )
     return bank, n_windows
-
-
-# =========================================================
-# Main
-# =========================================================
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--epochs", type=int, default=30)
-    ap.add_argument("--seeds", type=int, default=3)
-    ap.add_argument("--folds", type=int, default=5)
-    ap.add_argument("--seed", type=int, default=config.SEED,
-                    help="first seed; seeds are seed, seed+1, ...")
-    ap.add_argument("--rebuild-cache", action="store_true")
-    ap.add_argument("--final", action="store_true",
-                    help=f"train {config.FINAL_VARIANT} on all videos and save "
-                         f"{os.path.basename(config.FEATURE_CKPT)}")
-    ap.add_argument("--out", default=os.path.join(
-        config.RESULTS_DIR, "cv_intensity.json"))
-    args = ap.parse_args()
-
-    seed_everything(args.seed)
-    print(f"Device: {config.DEVICE}")
-
-    bank, n_windows = prepare_bank(args.rebuild_cache)
-
-    settings = {
-        "aug": config.FINAL_AUG,
-        "strides": tuple(config.FINAL_STRIDES),
-        "ensemble": config.FINAL_ENSEMBLE,
-    }
-    specs = {v: make_spec(v, **settings) for v in TRAINED_VARIANTS}
-    print(
-        f"Training settings (config.FINAL_*): aug={settings['aug']} "
-        f"strides={settings['strides']} ensemble={settings['ensemble']}"
-    )
-
-    runs, oof_pred, oof_target = run_cv(
-        bank, specs, args.folds, args.seeds, args.epochs, args.seed,
-        oof_key=config.FINAL_VARIANT
-    )
-
-    names = list(TRAINED_VARIANTS) + list(BASELINES)
-    summary = summarize(runs, names)
-    comparisons = {}
-
-    for cond in ("clean", "sim"):
-        comparisons[cond] = {
-            "lstm_minus_frame": paired(runs, "lstm", "frame", cond),
-            "lstm_minus_pool": paired(runs, "lstm", "pool", cond),
-            "pool_minus_frame": paired(runs, "pool", "frame", cond),
-        }
-
-    print_table(summary, names, len(runs), DISPLAY)
-
-    for cond in ("clean", "sim"):
-        print(f"Paired MAE difference, {cond} (negative = first is better):")
-        for key, c in comparisons[cond].items():
-            print(
-                f"  {key:<18} {c['mean_diff']:+.3f} +- {c['std_diff']:.3f}   "
-                f"first better in {c['a_better_in']}/{c['runs']} runs"
-            )
-
-    # Least squares minimizes MSE, not MAE, so the fit is only kept when
-    # it lowers the pooled out-of-fold MAE. Otherwise identity.
-    fit_scale, fit_bias = fit_linear(oof_pred, oof_target)
-    cal = (fit_scale * oof_pred + fit_bias).clip(
-        config.PAIN_SCORE_MIN, config.PAIN_SCORE_MAX
-    )
-    mae_raw = float(np.abs(oof_pred - oof_target).mean())
-    mae_cal = float(np.abs(cal - oof_target).mean())
-    use_fit = mae_cal < mae_raw
-    scale, bias = (fit_scale, fit_bias) if use_fit else (1.0, 0.0)
-    calibration = {
-        "fitted_scale": fit_scale,
-        "fitted_bias": fit_bias,
-        "oof_mae_raw": mae_raw,
-        "oof_mae_with_fit": mae_cal,
-        "applied": bool(use_fit),
-        "scale": scale,
-        "bias": bias,
-        "note": "least-squares fit on pooled out-of-fold predictions of "
-                "FINAL_VARIANT; applied only if it lowers out-of-fold MAE",
-    }
-    print(
-        f"\n{config.FINAL_VARIANT} out-of-fold calibration: fitted "
-        f"scale={fit_scale:.3f} bias={fit_bias:.3f}; OOF MAE raw "
-        f"{mae_raw:.3f} vs with fit {mae_cal:.3f} -> "
-        f"{'applied' if use_fit else 'NOT applied (identity)'}"
-    )
-
-    result = {
-        "target": "expression intensity on a synthetic morph scale (0-10)",
-        "metrics_on": "last frame of each window",
-        "conditions": {
-            "clean": "real test frames, spacing 6",
-            "sim": "held-out webcam-style degraded copies of the test frames "
-                   "(different distortion family from training)",
-            "clean_s5": "clean test frames, spacing 5",
-            "clean_s7": "clean test frames, spacing 7",
-        },
-        "n_videos": len(bank.names),
-        "n_windows": n_windows,
-        "seq_len": config.SEQ_LEN,
-        "stride_frames": config.SEQ_STRIDE,
-        "epochs": args.epochs,
-        "folds": args.folds,
-        "seeds": [args.seed + i for i in range(args.seeds)],
-        "features": "frozen ImageNet ResNet18",
-        "training_settings": {**settings, "strides": list(settings["strides"])},
-        "summary": summary,
-        "paired_mae_diff": comparisons,
-        "calibration_oof": calibration,
-        "runs": runs,
-    }
-
-    if args.final:
-        print(f"\n--final: training {config.FINAL_VARIANT} on all videos ...")
-        spec = make_spec(config.FINAL_VARIANT, **settings)
-        models = train_spec(spec, bank, bank.names, args.epochs, args.seed)
-        os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
-        torch.save(
-            {
-                "state_dict": models[0].state_dict(),
-                "state_dicts": [m.state_dict() for m in models],
-                "variant": config.FINAL_VARIANT,
-                "seq_len": config.SEQ_LEN,
-                "stride": config.SEQ_STRIDE,
-                "training_settings": result["training_settings"],
-                "scale": scale,
-                "bias": bias,
-                # Frozen ImageNet weights stored with the head so the
-                # live demo needs no download.
-                "backbone_state_dict": imagenet_backbone().state_dict(),
-            },
-            config.FEATURE_CKPT
-        )
-        result["final_checkpoint"] = config.FEATURE_CKPT
-        print(f"Saved {config.FEATURE_CKPT} ({len(models)} head(s))")
-
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
-
-    with open(args.out, "w", encoding="utf-8") as handle:
-        json.dump(result, handle, indent=2)
-
-    print(f"Results -> {args.out}")
-
-
-if __name__ == "__main__":
-    main()

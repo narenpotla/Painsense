@@ -1,11 +1,11 @@
-"""PainSense - small shared helpers."""
+"""painsense.utils - seed_everything: make every run reproducible."""
 import os
 import random
 
 import numpy as np
 import torch
 
-import config
+from painsense import config
 
 
 def seed_everything(seed=None):

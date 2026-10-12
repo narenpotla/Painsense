@@ -1,18 +1,23 @@
 """
-PainSense - web dashboard.
+dashboard.py - web dashboard for the live demo (http://127.0.0.1:5000).
 
-Run alongside realtime_infer.py:
-    python dashboard_web.py
-Then open http://127.0.0.1:5000 (bound to localhost only).
+Shows the current score, alert, capture status (OFFLINE when
+live_camera.py is not running) and a 30 s trend from the SQLite log.
+Bound to 127.0.0.1 only. Page: templates/index.html, static/.
+
+    GET /             the page
+    GET /api/state    latest live result (logs/dashboard_state.json)
+    GET /api/history  recent scores from logs/painsense.db (?n=, max 1000)
+
+Run (in a second terminal, next to live_camera.py):
+    python dashboard.py
 """
 
 import time
 
 from flask import Flask, render_template, jsonify, request
 
-import config
-import dashboard_state
-import db
+from painsense import config, db, live_state
 
 
 app = Flask(__name__)
@@ -44,7 +49,7 @@ def home():
 @app.route("/api/state")
 def api_state():
 
-    state = dashboard_state.read_state()
+    state = live_state.read_state()
 
     # "live" = the camera loop wrote a state recently.
     ts = state.get("updated_ts")

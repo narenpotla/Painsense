@@ -4,3 +4,4 @@ logs/*.db
 data/features/
 venv/
 logs/*.json
+logs/*.db-*

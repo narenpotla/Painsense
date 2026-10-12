@@ -1,10 +1,10 @@
 """
-PainSense - robustness ablation for the live feature model.
+robustness_study.py - which training settings make the live model hold up.
 
 Only the existing SynPAIN data is used. The question is which training
 settings make the model hold up better on webcam-like input and on
 imperfect live frame timing, judged by the same video-wise CV as
-cv_intensity.py (5 folds x 3 seeds, identical folds for every setting).
+cross_validate.py (5 folds x 3 seeds, identical folds for every setting).
 
 Stage A, 12 settings = {frame, pool, lstm} x
     base         clean + flipped features, spacing 6
@@ -27,11 +27,11 @@ Selection rules (fixed before running):
 Picking the best of several settings on the same folds is slightly
 optimistic; the README says so.
 
-Writes results/cv_robustness.json and prints the config.py values to
-use. It does NOT edit config.py.
+Writes results/robustness_study.json and prints the values to put in
+painsense/config.py (FINAL_*). It does NOT edit config.py.
 
 Run:
-    python cv_robustness.py --epochs 30 --seeds 3
+    python robustness_study.py --epochs 30 --seeds 3
 """
 
 import argparse
@@ -40,8 +40,8 @@ import os
 
 import numpy as np
 
-import config
-from cv_intensity import (
+from painsense import config
+from painsense.features import (
     TRAINED_VARIANTS,
     make_spec,
     paired,
@@ -51,7 +51,7 @@ from cv_intensity import (
     spec_name,
     summarize,
 )
-from utils import seed_everything
+from painsense.utils import seed_everything
 
 CONFIGS = {
     "base": {"aug": False, "strides": (6,)},
@@ -76,7 +76,7 @@ def main():
     ap.add_argument("--ensemble", type=int, default=5,
                     help="ensemble size tried in stage B")
     ap.add_argument("--out", default=os.path.join(
-        config.RESULTS_DIR, "cv_robustness.json"))
+        config.RESULTS_DIR, "robustness_study.json"))
     args = ap.parse_args()
 
     seed_everything(args.seed)

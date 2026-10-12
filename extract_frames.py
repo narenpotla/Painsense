@@ -1,68 +1,78 @@
+"""
+extract_frames.py - data prep step 1: split SynPAIN videos into frames.
+
+    data/videos/raw/SynPain/Videos/<name>.mp4
+        -> data/videos/frames/<name>/frame_000001.jpg, frame_000002.jpg, ...
+
+Frame numbers start at 1 and are used later to build the 0-10 target
+(linear in frame index for Pain clips). Videos whose frame folder
+already exists are skipped unless --overwrite is given.
+
+Run:
+    python extract_frames.py
+Next step: python crop_faces.py
+"""
+
+import argparse
+from pathlib import Path
+
 import cv2
-import os
-import glob
 
-import config
+from painsense import config
 
-# Folder containing the 40 unlabeled videos (label-free copies of the
-# SynPAIN clips, see unlabeled_videos.py). Paths are relative to the
-# project root so the script works from any working directory.
-VIDEO_DIR = os.path.join(config.ROOT, "data", "videos", "unlabeled", "videos")
 
-# Folder where frames will be stored
-FRAME_DIR = os.path.join(config.ROOT, "data", "videos", "frames")
-
-# Create the main frames directory
-os.makedirs(FRAME_DIR, exist_ok=True)
-
-# Find all MP4 videos
-video_files = glob.glob(os.path.join(VIDEO_DIR, "*.mp4"))
-video_files.sort()
-
-print(f"Found {len(video_files)} videos.")
-print("=" * 50)
-
-for video_path in video_files:
-
-    # Get video filename without extension
-    video_name = os.path.splitext(os.path.basename(video_path))[0]
-
-    # Create a folder for this video's frames
-    output_folder = os.path.join(FRAME_DIR, video_name)
-    os.makedirs(output_folder, exist_ok=True)
-
-    # Open video
-    cap = cv2.VideoCapture(video_path)
+def extract_video(video_path, out_dir):
+    cap = cv2.VideoCapture(str(video_path))
 
     if not cap.isOpened():
-        print(f"ERROR: Could not open {video_name}")
-        continue
+        print(f"ERROR: could not open {video_path.name}")
+        return 0
 
-    frame_number = 0
+    out_dir.mkdir(parents=True, exist_ok=True)
+    count = 0
 
     while True:
+        ok, frame = cap.read()
 
-        ret, frame = cap.read()
-
-        # Stop when video ends
-        if not ret:
+        if not ok:
             break
 
-        # Create frame filename
-        frame_filename = os.path.join(
-            output_folder,
-            f"frame_{frame_number:04d}.jpg"
-        )
+        count += 1
+        cv2.imwrite(str(out_dir / f"frame_{count:06d}.jpg"), frame)
 
-        # Save frame
-        cv2.imwrite(frame_filename, frame)
-
-        frame_number += 1
-
-    # Release video
     cap.release()
+    return count
 
-    print(f"{video_name}: {frame_number} frames extracted")
 
-print("=" * 50)
-print("Frame extraction completed!")
+def main():
+    ap = argparse.ArgumentParser(
+        description="Split SynPAIN videos into frames."
+    )
+    ap.add_argument("--videos", default=config.RAW_VIDEO_DIR)
+    ap.add_argument("--out", default=config.VIDEO_FRAME_DIR)
+    ap.add_argument("--overwrite", action="store_true")
+    args = ap.parse_args()
+
+    videos = sorted(Path(args.videos).glob("*.mp4"))
+    out_root = Path(args.out)
+
+    if not videos:
+        raise SystemExit(f"No .mp4 files found in {args.videos}")
+
+    print(f"Found {len(videos)} videos")
+
+    for video in videos:
+        out_dir = out_root / video.stem
+
+        if out_dir.exists() and any(out_dir.iterdir()) and not args.overwrite:
+            print(f"  skip {video.stem} (frames exist)")
+            continue
+
+        n = extract_video(video, out_dir)
+        print(f"  {video.stem}: {n} frames")
+
+    print(f"Frames in {out_root}")
+
+
+if __name__ == "__main__":
+    main()

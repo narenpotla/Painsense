@@ -1,6 +1,9 @@
 """
-PainSense - latest live result, shared with the Flask dashboard through
-logs/dashboard_state.json (written atomically).
+painsense.live_state - the latest live result, shared with the dashboard.
+
+The camera loop writes logs/dashboard_state.json (atomically, via a
+temp file); dashboard.py reads it every second. updated_ts tells the
+dashboard whether the camera is still running.
 """
 
 import json
@@ -9,14 +12,10 @@ import tempfile
 import time
 from datetime import datetime
 
-import config
+from painsense import config
 
 
-STATE_FILE = os.path.join(
-    config.ROOT,
-    "logs",
-    "dashboard_state.json"
-)
+STATE_FILE = config.LIVE_STATE_PATH
 
 
 def _empty_state():

@@ -1,53 +1,19 @@
 """
-PainSense - real-time inference + web dashboard integration.
+painsense.live - the live scoring loop (webcam or video file).
 
-CURRENT MODEL OUTPUT:
-    Expression intensity from 0 to 10, on a synthetic morph scale.
+    load_scorer   live model: checkpoints/pain_intensity_features.pt
+                  (offline, ensemble-aware); falls back to the older
+                  pain_intensity.pt with a frame-spacing warning
+    LiveScorer    encode(face) once per new frame -> 512-d feature;
+                  score(last SEQ_LEN features) -> 0-10
+    run           camera/video loop: face crop every 0.25 s, feature
+                  buffer, score, AlertState, SQLite log, dashboard state,
+                  OpenCV overlay. Returns one record per sample.
 
-The score estimates progress along the generated SynPAIN
-neutral-to-pain morph. It is not a clinical PSPI or VAS score.
-
-Pipeline:
-
-    Camera
-       |
-    Face detection + crop (same recipe as the training crops)
-       |
-    ResNet18 features, computed ONCE per new frame and cached
-       |
-    LSTM over the last SEQ_LEN cached features
-       |
-    Score 0-10
-       |
-    Alert rule (median of last 5 scores + hysteresis)
-       |
-    SQLite log + dashboard state
-
-Frames are sampled every CAPTURE_INTERVAL_SEC (= SEQ_STRIDE / 24 s),
-the same spacing the training windows use.
-
-If no face is detected:
-    - nothing is added to the feature buffer and the buffer is cleared
-    - the LSTM is NOT executed
-    - prediction, score and alert are cleared
-    - the alert state (median history, hysteresis) is reset
-
-Model choice:
-    checkpoints/pain_intensity_features.pt   (preferred; made by
-        cv_intensity.py --final, trained at the live frame spacing)
-    checkpoints/pain_intensity.pt            (fallback; trained at 1/24 s
-        frame spacing, so live scores are not trustworthy)
-
-Run:
-    python realtime_infer.py                       # webcam, OpenCV window
-    python realtime_infer.py --camera 1            # another webcam
-    python realtime_infer.py --video clip.mp4      # replay a file
-    python realtime_infer.py --video clip.mp4 --headless
-
-Press 'q' to quit (or Ctrl+C with --headless).
+If no face is found the buffer is cleared, nothing is scored and the
+alert history resets. Used by live_camera.py and score_video.py.
 """
 
-import argparse
 import json
 import os
 import time
@@ -57,19 +23,9 @@ import cv2
 import torch
 from PIL import Image
 
-import config
-import db
-import alert_rules
-import dashboard_state
-import data_prep
-
-from data_prep import crop_face
-from dataset import frame_transform
-from model import (
-    PainIntensityLSTM,
-    load_feature_checkpoint
-)
-from utils import seed_everything
+from painsense import alerts, config, db, face, live_state
+from painsense.data import frame_transform
+from painsense.models import PainIntensityLSTM, load_feature_checkpoint
 
 
 # =========================================================
@@ -211,7 +167,7 @@ def load_scorer():
         "WARNING: that model was trained on frames 1/24 s apart, but live "
         f"frames are {config.CAPTURE_INTERVAL_SEC:.2f} s apart, so its "
         "scores are not trustworthy. Create the feature checkpoint with: "
-        "python cv_intensity.py --epochs 30 --seeds 3 --final"
+        "python cross_validate.py --epochs 30 --seeds 3 --final"
     )
 
     model = load_model()
@@ -402,7 +358,7 @@ def draw_overlay(
 # =========================================================
 
 def _clear_dashboard(sequence_current=0):
-    dashboard_state.write_state(
+    live_state.write_state(
         score=None,
         probability=None,
         prediction=None,
@@ -465,14 +421,14 @@ def run(
 
     scorer = load_scorer() if use_model else None
 
-    alert_state = alert_rules.AlertState()
+    alert_state = alerts.AlertState()
 
     cap, is_file, fps = _open_source(camera_index, video_path)
 
     # A webcam uses the stricter live face size; a video file uses the
     # same detector settings as the stored training crops.
     min_face = (
-        data_prep.DETECT_MIN_SIZE if is_file else config.LIVE_MIN_FACE_SIZE
+        face.DETECT_MIN_SIZE if is_file else config.LIVE_MIN_FACE_SIZE
     )
     step = (
         max(1, round(fps * config.CAPTURE_INTERVAL_SEC)) if is_file else None
@@ -551,11 +507,11 @@ def run(
 
                 last_sample_t = now
 
-                face = data_prep.crop_face(frame, min_size=min_face)
+                face_crop = face.crop_face(frame, min_size=min_face)
                 record = {
                     "frame": frame_index,
                     "t": round(frame_index / fps, 3) if is_file else now,
-                    "face": face is not None,
+                    "face": face_crop is not None,
                     "score": None,
                     "median": None,
                     "alert": False,
@@ -565,7 +521,7 @@ def run(
                 # NO FACE DETECTED
                 # =========================================
 
-                if face is None:
+                if face_crop is None:
 
                     if face_detected and verbose:
                         print(
@@ -596,7 +552,7 @@ def run(
                     # ResNet runs ONCE per new frame; only the
                     # temporal head sees the whole window.
                     if scorer is not None:
-                        feature_buffer.append(scorer.encode(face))
+                        feature_buffer.append(scorer.encode(face_crop))
                     else:
                         feature_buffer.append(None)
 
@@ -640,7 +596,7 @@ def run(
                             except Exception as db_error:
                                 print(f"[DATABASE] Warning: {db_error}")
 
-                            dashboard_state.write_state(
+                            live_state.write_state(
                                 score=round(score, 2),
                                 probability=score / float(
                                     config.PAIN_SCORE_MAX
@@ -713,52 +669,3 @@ def run(
         print("PainSense live inference stopped.")
 
     return records
-
-
-# =========================================================
-# PROGRAM ENTRY
-# =========================================================
-
-if __name__ == "__main__":
-
-    ap = argparse.ArgumentParser()
-
-    ap.add_argument(
-        "--camera",
-        type=int,
-        default=0
-    )
-
-    ap.add_argument(
-        "--video",
-        default=None,
-        help="replay a video file instead of the webcam"
-    )
-
-    ap.add_argument(
-        "--headless",
-        action="store_true",
-        help="no OpenCV window (Ctrl+C stops a webcam run)"
-    )
-
-    ap.add_argument(
-        "--no-model",
-        action="store_true",
-        help=(
-            "Run camera and dashboard "
-            "without CNN-LSTM inference"
-        )
-    )
-
-    args = ap.parse_args()
-
-    seed_everything(config.SEED)
-
-    print(f"Using device: {config.DEVICE}")
-
-    run(
-        camera_index=args.camera,
-        use_model=not args.no_model,
-        video_path=args.video,
-        headless=args.headless
-    )
