@@ -357,8 +357,33 @@ def draw_overlay(
 # MAIN INFERENCE
 # =========================================================
 
+_state_write_warned = False
+
+
+def _write_state(**state):
+    """
+    Update the dashboard state without ever stopping the live loop.
+
+    A locked state file (Windows) only costs one dashboard update; the
+    score is still computed and logged.
+    """
+
+    global _state_write_warned
+
+    try:
+        live_state.write_state(**state)
+    except OSError as error:
+        if not _state_write_warned:
+            print(
+                f"[DASHBOARD] Warning: could not update the dashboard "
+                f"state ({error}). Live scoring continues; further "
+                "warnings of this kind are suppressed."
+            )
+            _state_write_warned = True
+
+
 def _clear_dashboard(sequence_current=0):
-    live_state.write_state(
+    _write_state(
         score=None,
         probability=None,
         prediction=None,
@@ -596,7 +621,7 @@ def run(
                             except Exception as db_error:
                                 print(f"[DATABASE] Warning: {db_error}")
 
-                            live_state.write_state(
+                            _write_state(
                                 score=round(score, 2),
                                 probability=score / float(
                                     config.PAIN_SCORE_MAX

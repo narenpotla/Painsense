@@ -80,12 +80,32 @@ def write_state(
         with os.fdopen(fd, "w", encoding="utf-8") as file:
             json.dump(state, file, indent=2)
 
-        os.replace(temp_path, STATE_FILE)
+        _replace_with_retry(temp_path, STATE_FILE)
 
     finally:
 
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+def _replace_with_retry(src, dst, attempts=40, wait=0.005):
+    """
+    os.replace, retried briefly.
+
+    On Windows the swap fails with "Access is denied" while another
+    process (the dashboard reading the state, antivirus, indexing) has
+    dst open. Those reads take microseconds, so a short retry wins.
+    Raises the last error if the file stays locked (~0.2 s).
+    """
+
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(wait)
 
 
 def read_state():
@@ -98,8 +118,12 @@ def read_state():
 
     try:
 
+        # Read the text in one go and close the file before parsing, so
+        # the writer's swap is blocked for as short a time as possible.
         with open(STATE_FILE, "r", encoding="utf-8") as file:
-            state = json.load(file)
+            text = file.read()
+
+        state = json.loads(text)
 
     except (json.JSONDecodeError, OSError):
         return _empty_state()

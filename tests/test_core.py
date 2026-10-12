@@ -305,6 +305,48 @@ class StorageTest(unittest.TestCase):
             finally:
                 config.DB_PATH = old
 
+    def test_state_write_retries_locked_file(self):
+        # Windows: os.replace fails while a reader has the file open.
+        from unittest import mock
+
+        from painsense import live_state as dashboard_state
+
+        old = dashboard_state.STATE_FILE
+        real_replace = os.replace
+        calls = {"n": 0}
+
+        def flaky_replace(src, dst):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise PermissionError(5, "Access is denied")
+            return real_replace(src, dst)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dashboard_state.STATE_FILE = os.path.join(tmp, "state.json")
+
+            try:
+                with mock.patch.object(dashboard_state.os, "replace", flaky_replace):
+                    dashboard_state.write_state(score=3.0)
+
+                self.assertEqual(calls["n"], 3)
+                self.assertEqual(dashboard_state.read_state()["score"], 3.0)
+                self.assertEqual(
+                    [f for f in os.listdir(tmp) if f != "state.json"], []
+                )
+            finally:
+                dashboard_state.STATE_FILE = old
+
+    def test_live_loop_survives_state_write_failure(self):
+        from unittest import mock
+
+        from painsense import live
+
+        with mock.patch.object(
+            live.live_state, "write_state",
+            side_effect=PermissionError(5, "Access is denied")
+        ):
+            live._write_state(score=1.0)   # must not raise
+
     def test_dashboard_state_roundtrip(self):
         from painsense import live_state as dashboard_state
 
